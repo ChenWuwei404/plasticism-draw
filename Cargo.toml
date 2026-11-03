@@ -3,11 +3,19 @@ name = "plasticism-draw"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "plasticism_draw"
+path = "src/lib.rs"
+
+[[bin]]
+name = "plasticism-draw"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1.0.104"
+glifo = "0.4.0"
 pollster = "1.0.1"
-vello = "0.11.0"
-vello_common = "0.3.0"
-vello_gpu = "0.3.0"
+skrifa = "0.44.0"
+vello_gpu = { version = "0.3.0", features = ["text"] }
 wgpu = "30.0.1"
 winit = "0.30.13"
