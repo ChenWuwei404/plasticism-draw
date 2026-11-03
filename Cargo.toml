@@ -1,0 +1,13 @@
+[package]
+name = "plasticism-draw"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+pollster = "1.0.1"
+vello = "0.11.0"
+vello_common = "0.3.0"
+vello_gpu = "0.3.0"
+wgpu = "30.0.1"
+winit = "0.30.13"
