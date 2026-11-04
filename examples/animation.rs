@@ -9,7 +9,7 @@ fn main() -> anyhow::Result<()> {
 
     App::new("plasticism · animation", 900, 640)
         .background(colors::BLACK)
-        .run(move |c, frame| {
+        .draw(move |c, frame| {
             let dt = frame.delta.as_secs_f64();
             pulse = (pulse + dt * 2.2).rem_euclid(std::f64::consts::TAU);
             hue_shift = (hue_shift + dt * 0.06).fract();
@@ -49,6 +49,7 @@ fn main() -> anyhow::Result<()> {
                 colors::LIGHT_GRAY,
             );
         })
+        .run()
 }
 
 fn hsla(h: f64, s: f64, l: f64, a: f64) -> Color {

@@ -10,7 +10,7 @@ fn main() -> anyhow::Result<()> {
 
     App::new("plasticism · clip", 960, 680)
         .background(colors::WHITE_SMOKE)
-        .run(move |c, frame| {
+        .draw(move |c, frame| {
             phase += frame.delta.as_secs_f64();
 
             let center = (c.width() / 2.0, c.height() / 2.0);
@@ -97,4 +97,5 @@ fn main() -> anyhow::Result<()> {
                 colors::DIM_GRAY,
             );
         })
+        .run()
 }

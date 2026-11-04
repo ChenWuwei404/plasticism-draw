@@ -5,7 +5,7 @@ use plasticism_draw::prelude::*;
 fn main() -> anyhow::Result<()> {
     App::new("plasticism · shapes", 900, 640)
         .background(colors::WHITE)
-        .run(|c, frame| {
+        .draw(|c, frame| {
             let t = frame.time.as_secs_f64();
 
             let rect = Rect::from_origin_size((48.0, 48.0), (280.0, 170.0));
@@ -61,4 +61,5 @@ fn main() -> anyhow::Result<()> {
                 );
             });
         })
+        .run()
 }

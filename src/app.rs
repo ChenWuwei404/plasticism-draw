@@ -10,12 +10,16 @@ use vello_gpu::{
 use wgpu::CurrentSurfaceTexture;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, KeyEvent, WindowEvent};
+use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
 use crate::{Canvas, Color};
+
+type EventCallback<S> = Box<
+    dyn for<'a, 'b, 'c> FnMut(&mut S, &'a WindowEvent, &'b ActiveEventLoop, &'c Window) + 'static,
+>;
+type DrawCallback<S> = Box<dyn FnMut(&mut S, &mut Canvas, Frame) + 'static>;
 
 /// Timing information for one rendered frame.
 #[derive(Clone, Copy, Debug)]
@@ -35,14 +39,21 @@ pub struct Frame {
 ///
 /// Rendering is paced by the surface's vertical synchronization. No fixed
 /// frame rate, sleeps, or manual frame limiter are applied.
-pub struct App {
+///
+/// The optional state parameter is owned by the application and mutably passed
+/// to the event and draw callbacks.
+pub struct App<S = ()> {
     title: String,
     width: u32,
     height: u32,
     background: Color,
+    state: S,
+    on_event: Option<EventCallback<S>>,
+    on_draw: Option<DrawCallback<S>>,
+    close_on_request: bool,
 }
 
-impl App {
+impl App<()> {
     /// Creates an application with a logical window size.
     ///
     /// The size is specified in logical pixels; the physical surface follows
@@ -53,29 +64,102 @@ impl App {
             width: width.max(1),
             height: height.max(1),
             background: Color::WHITE,
+            state: (),
+            on_event: None,
+            on_draw: None,
+            close_on_request: false,
         }
     }
 
+    /// Attaches user-owned mutable state for the callbacks.
+    ///
+    /// Call this before registering `on_event`, `on_draw`, or `draw`; any
+    /// callbacks already registered for `()` are discarded.
+    pub fn state<S: 'static>(self, state: S) -> App<S> {
+        App {
+            title: self.title,
+            width: self.width,
+            height: self.height,
+            background: self.background,
+            state,
+            on_event: None,
+            on_draw: None,
+            close_on_request: false,
+        }
+    }
+
+    /// Registers the stateless drawing callback and returns the builder.
+    ///
+    /// This convenience entry responds to `CloseRequested` by exiting the
+    /// event loop. Use [`App::on_draw`] with a state if you need custom close
+    /// handling.
+    pub fn draw<F>(mut self, mut draw: F) -> Self
+    where
+        F: FnMut(&mut Canvas, Frame) + 'static,
+    {
+        self.on_draw = Some(Box::new(
+            move |_state: &mut (), canvas: &mut Canvas, frame: Frame| {
+                draw(canvas, frame);
+            },
+        ));
+        self.close_on_request = true;
+        self
+    }
+}
+
+impl<S: 'static> App<S> {
     /// Sets the color used to clear the window before each frame.
     pub fn background(mut self, color: impl Into<Color>) -> Self {
         self.background = color.into();
         self
     }
 
-    /// Runs the event loop and invokes `draw` for every vsync-paced frame.
+    /// Registers a raw winit window-event handler.
     ///
-    /// The callback receives the current [`Canvas`] and a [`Frame`] whose
-    /// `delta` is the actual time since the previous callback.
-    pub fn run<F>(self, draw: F) -> Result<()>
+    /// The handler is called before the library performs its own lifecycle
+    /// handling. It receives the user state, the raw [`WindowEvent`], the
+    /// winit event loop, and the application window.
+    ///
+    /// Closing is not handled by default here. Call `event_loop.exit()` when a
+    /// close request should exit the application.
+    pub fn on_event<F>(mut self, handler: F) -> Self
     where
-        F: FnMut(&mut Canvas, Frame) + 'static,
+        F: for<'a, 'b, 'c> FnMut(&mut S, &'a WindowEvent, &'b ActiveEventLoop, &'c Window)
+            + 'static,
     {
+        self.on_event = Some(Box::new(handler));
+        self
+    }
+
+    /// Registers a stateful drawing callback.
+    ///
+    /// This entry does not handle `CloseRequested`; use [`App::on_event`] to
+    /// implement a custom close policy.
+    pub fn on_draw<F>(mut self, draw: F) -> Self
+    where
+        F: FnMut(&mut S, &mut Canvas, Frame) + 'static,
+    {
+        self.on_draw = Some(Box::new(draw));
+        self.close_on_request = false;
+        self
+    }
+
+    /// Runs the event loop.
+    ///
+    /// A draw callback must have been registered with [`App::draw`] or
+    /// [`App::on_draw`].
+    pub fn run(self) -> Result<()> {
+        if self.on_draw.is_none() {
+            return Err(anyhow!(
+                "no draw callback registered; call .draw(...) or .on_draw(...)"
+            ));
+        }
+
         let event_loop = EventLoop::new().context("failed to create the winit event loop")?;
         event_loop.set_control_flow(ControlFlow::Poll);
 
         let mut runner = Runner {
             app: self,
-            draw,
             state: None,
             error: None,
             start: Instant::now(),
@@ -95,9 +179,8 @@ impl App {
     }
 }
 
-struct Runner<F> {
-    app: App,
-    draw: F,
+struct Runner<S> {
+    app: App<S>,
     state: Option<State>,
     error: Option<anyhow::Error>,
     start: Instant,
@@ -105,10 +188,7 @@ struct Runner<F> {
     next_frame: u64,
 }
 
-impl<F> ApplicationHandler for Runner<F>
-where
-    F: FnMut(&mut Canvas, Frame) + 'static,
-{
+impl<S: 'static> ApplicationHandler for Runner<S> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_some() {
             return;
@@ -140,17 +220,19 @@ where
             return;
         }
 
+        if let Some(handler) = self.app.on_event.as_mut() {
+            handler(&mut self.app.state, &event, event_loop, &state.window);
+        }
+
+        // The stateless `.draw(...)` convenience keeps the traditional
+        // "clicking the close button exits" behavior. The stateful
+        // `.on_draw(...)` entry deliberately has no default close policy.
+        if self.app.close_on_request && matches!(event, WindowEvent::CloseRequested) {
+            event_loop.exit();
+            return;
+        }
+
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::KeyboardInput {
-                event:
-                    KeyEvent {
-                        logical_key: Key::Named(NamedKey::Escape),
-                        state: ElementState::Pressed,
-                        ..
-                    },
-                ..
-            } => event_loop.exit(),
             WindowEvent::Resized(size) => {
                 self.last_frame_start = None;
                 if let Err(error) = state.resize(size) {
@@ -198,10 +280,7 @@ where
     }
 }
 
-impl<F> Runner<F>
-where
-    F: FnMut(&mut Canvas, Frame) + 'static,
-{
+impl<S: 'static> Runner<S> {
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: anyhow::Error) {
         self.error = Some(error);
         event_loop.exit();
@@ -270,7 +349,17 @@ where
             });
 
         state.canvas.begin_frame(width, height, scale_factor);
-        (self.draw)(&mut state.canvas, frame);
+        {
+            let App {
+                state: app_state,
+                on_draw,
+                ..
+            } = &mut self.app;
+            let draw = on_draw
+                .as_mut()
+                .ok_or_else(|| anyhow!("no draw callback registered"))?;
+            draw(app_state, &mut state.canvas, frame);
+        }
         state.canvas.finish_frame();
 
         let render_size = RenderSize { width, height };
@@ -320,7 +409,7 @@ struct State {
 }
 
 impl State {
-    fn new(event_loop: &ActiveEventLoop, app: &App) -> Result<Self> {
+    fn new<S>(event_loop: &ActiveEventLoop, app: &App<S>) -> Result<Self> {
         let attributes = Window::default_attributes()
             .with_title(&app.title)
             .with_inner_size(LogicalSize::new(app.width, app.height));

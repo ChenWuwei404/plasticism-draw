@@ -8,7 +8,7 @@ fn main() -> anyhow::Result<()> {
 
     App::new("plasticism-draw", 960, 680)
         .background(colors::WHITE)
-        .run(move |c, frame| {
+        .draw(move |c, frame| {
             angle += frame.delta.as_secs_f64() * 16.0;
 
             c.fill_rect(
@@ -51,4 +51,5 @@ fn main() -> anyhow::Result<()> {
                 colors::DIM_GRAY,
             );
         })
+        .run()
 }

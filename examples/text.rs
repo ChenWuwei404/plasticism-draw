@@ -7,7 +7,7 @@ fn main() -> anyhow::Result<()> {
 
     App::new("plasticism · text", 960, 640)
         .background(colors::WHITE)
-        .run(move |c, frame| {
+        .draw(move |c, frame| {
             let measured = font.measure("Hello, plasticism", 64.0);
             let x = (c.width() - measured.width) / 2.0;
 
@@ -41,4 +41,5 @@ fn main() -> anyhow::Result<()> {
                 colors::LIGHT_SLATE_GRAY,
             );
         })
+        .run()
 }
