@@ -1,5 +1,6 @@
 //! The drawing surface passed to the render callback.
 
+use glifo::Glyph;
 use vello_gpu::peniko::Fill;
 use vello_gpu::{Resources, Scene};
 
@@ -369,16 +370,17 @@ impl Canvas {
         size: f64,
         paint: impl Into<Paint>,
     ) {
-        let mut layout = font.layout(text, size);
+        let layout = font.layout(text, size);
         if layout.glyphs.is_empty() {
             return;
         }
 
         let baseline = baseline.into();
-        for glyph in &mut layout.glyphs {
-            glyph.x += baseline.x as f32;
-            glyph.y += baseline.y as f32;
-        }
+        let glyphs = layout.glyphs.iter().map(|glyph| Glyph {
+            id: glyph.id,
+            x: glyph.x + baseline.x as f32,
+            y: glyph.y + baseline.y as f32,
+        });
 
         self.scene.set_paint(paint.into().into_inner());
         let _ = self
@@ -386,7 +388,7 @@ impl Canvas {
             .glyph_run(&mut self.resources, font.data())
             .font_size(size as f32)
             .atlas_cache(true)
-            .fill_glyphs(layout.glyphs.into_iter());
+            .fill_glyphs(glyphs);
     }
 
     /// Strokes multi-line text.
@@ -400,17 +402,18 @@ impl Canvas {
         size: f64,
         stroke: impl Into<Stroke>,
     ) {
-        let mut layout = font.layout(text, size);
+        let layout = font.layout(text, size);
         if layout.glyphs.is_empty() {
             return;
         }
 
         let stroke = stroke.into();
         let baseline = baseline.into();
-        for glyph in &mut layout.glyphs {
-            glyph.x += baseline.x as f32;
-            glyph.y += baseline.y as f32;
-        }
+        let glyphs = layout.glyphs.iter().map(|glyph| Glyph {
+            id: glyph.id,
+            x: glyph.x + baseline.x as f32,
+            y: glyph.y + baseline.y as f32,
+        });
 
         self.apply_stroke(&stroke);
         let _ = self
@@ -418,7 +421,7 @@ impl Canvas {
             .glyph_run(&mut self.resources, font.data())
             .font_size(size as f32)
             .atlas_cache(true)
-            .stroke_glyphs(layout.glyphs.into_iter());
+            .stroke_glyphs(glyphs);
     }
 
     fn apply_stroke(&mut self, stroke: &Stroke) {

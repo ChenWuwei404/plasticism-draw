@@ -1,7 +1,8 @@
 //! Font loading and a small left-to-right text layout implementation.
 
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use glifo::Glyph;
@@ -20,6 +21,33 @@ use crate::kurbo::Size;
 #[derive(Clone, Debug)]
 pub struct Font {
     data: FontData,
+    layouts: Arc<Mutex<LayoutCache>>,
+}
+
+const LAYOUT_CACHE_CAPACITY: usize = 128;
+
+#[derive(Debug, Default)]
+struct LayoutCache {
+    by_size: HashMap<u32, HashMap<String, Arc<TextLayout>>>,
+    len: usize,
+}
+
+impl LayoutCache {
+    fn get(&self, size: f32, text: &str) -> Option<Arc<TextLayout>> {
+        self.by_size.get(&size.to_bits())?.get(text).cloned()
+    }
+
+    fn insert(&mut self, size: f32, text: &str, layout: Arc<TextLayout>) {
+        if self.len >= LAYOUT_CACHE_CAPACITY {
+            self.by_size.clear();
+            self.len = 0;
+        }
+
+        let entries = self.by_size.entry(size.to_bits()).or_default();
+        if entries.insert(text.to_owned(), layout).is_none() {
+            self.len += 1;
+        }
+    }
 }
 
 impl Font {
@@ -36,6 +64,7 @@ impl Font {
 
         Ok(Self {
             data: FontData::new(Blob::new(Arc::new(bytes)), index),
+            layouts: Arc::default(),
         })
     }
 
@@ -65,16 +94,37 @@ impl Font {
         &self.data
     }
 
-    pub(crate) fn layout(&self, text: &str, size: f64) -> TextLayout {
+    /// Shapes a string, reusing the result when the same text and size are
+    /// drawn again. The returned value is shared with the cache, so drawing
+    /// does not clone the glyph vector.
+    pub(crate) fn layout(&self, text: &str, size: f64) -> Arc<TextLayout> {
         if text.is_empty() || !size.is_finite() || size <= 0.0 {
-            return TextLayout {
-                glyphs: Vec::new(),
-                width: 0.0,
-                height: 0.0,
-            };
+            return Arc::new(TextLayout::default());
         }
 
         let size = size as f32;
+        if !size.is_finite() || size <= 0.0 {
+            return Arc::new(TextLayout::default());
+        }
+
+        let cache = self
+            .layouts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(layout) = cache.get(size, text) {
+            return layout;
+        }
+        drop(cache);
+
+        let layout = Arc::new(self.shape_layout(text, size));
+        self.layouts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(size, text, Arc::clone(&layout));
+        layout
+    }
+
+    fn shape_layout(&self, text: &str, size: f32) -> TextLayout {
         let line_height = size * 1.2;
         let font = self.font_ref();
         let charmap = font.charmap();
@@ -85,7 +135,9 @@ impl Font {
             .and_then(|glyph| metrics.advance_width(glyph))
             .unwrap_or(0.0);
 
-        let mut glyphs = Vec::with_capacity(text.chars().count());
+        // `len()` is an upper bound for the number of chars and avoids a
+        // separate scan of the string just to size this buffer.
+        let mut glyphs = Vec::with_capacity(text.len());
         let mut x = 0.0_f32;
         let mut line = 0_u32;
         let mut max_width = 0.0_f32;
@@ -130,6 +182,7 @@ impl Font {
     }
 }
 
+#[derive(Debug, Default)]
 pub(crate) struct TextLayout {
     pub(crate) glyphs: Vec<Glyph>,
     pub(crate) width: f64,
@@ -138,6 +191,8 @@ pub(crate) struct TextLayout {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::Font;
 
     const INTER: &[u8] = include_bytes!("../assets/Inter-Regular.ttf");
@@ -180,6 +235,18 @@ mod tests {
 
         assert!(size.width > 0.0);
         assert!(size.height > 24.0);
+    }
+
+    #[test]
+    fn layout_cache_reuses_entries_and_separates_sizes() {
+        let font = Font::from_bytes(INTER).unwrap();
+        let first = font.layout("Hello", 32.0);
+        let same = font.layout("Hello", 32.0);
+        let larger = font.layout("Hello", 40.0);
+
+        assert!(Arc::ptr_eq(&first, &same));
+        assert!(!Arc::ptr_eq(&first, &larger));
+        assert!(larger.width > first.width);
     }
 
     #[test]
