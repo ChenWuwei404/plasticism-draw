@@ -11,9 +11,13 @@ fn main() -> anyhow::Result<()> {
         .draw(move |c, frame| {
             phase += frame.delta.as_secs_f64();
 
-            let left = Rect::from_origin_size((60.0, 64.0), (380.0, 220.0));
-            let right = Rect::from_origin_size((520.0, 64.0), (380.0, 220.0));
-            let banner = Rect::from_origin_size((60.0, 336.0), (840.0, 244.0));
+            let left_shape = R2RoundedRect::new(60.0, 64.0, 440.0, 284.0, 48.0);
+            let right_shape = R2RoundedRect::new(520.0, 64.0, 900.0, 284.0, 60.0);
+            let banner_shape = R2RoundedRect::new(60.0, 336.0, 900.0, 580.0, 56.0);
+
+            let left = left_shape.rect();
+            let right = right_shape.rect();
+            let banner = banner_shape.rect();
 
             let warm = Gradient::new_linear((left.x0, left.y0), (left.x1, left.y1)).with_stops([
                 (0.0, colors::GOLD),
@@ -23,18 +27,19 @@ fn main() -> anyhow::Result<()> {
             let cool = Gradient::new_linear((right.x0, right.y0), (right.x1, right.y1))
                 .with_stops([(0.0, colors::DARK_SLATE_BLUE), (1.0, colors::LIGHT_CYAN)]);
 
-            c.fill_r2_rounded_rect(left, 48.0, &warm);
-            c.stroke_r2_rounded_rect(left, 48.0, Stroke::new(4.0, colors::BLACK));
+            // R2RoundedRect implements kurbo::Shape, so the generic Canvas
+            // fill/stroke methods accept it directly.
+            c.fill(left_shape, &warm);
+            c.stroke(left_shape, Stroke::new(4.0, colors::BLACK));
 
-            c.fill_r2_rounded_rect(right, 60.0, &cool);
-            c.stroke_r2_rounded_rect(
-                right,
-                60.0,
+            c.fill(right_shape, &cool);
+            c.stroke(
+                right_shape,
                 Stroke::new(3.0, colors::WHITE).dash(0.0, [12.0, 8.0]),
             );
 
             // Clip animated stripes and text to the R2 outline.
-            let banner_path = r2_rounded_rect_path(banner, 56.0);
+            let banner_path = banner_shape.to_path(0.1);
             c.with_clip(&banner_path, |c| {
                 c.fill_rect(banner, &warm);
 
@@ -64,7 +69,7 @@ fn main() -> anyhow::Result<()> {
                 );
             });
 
-            c.stroke_r2_rounded_rect(banner, 56.0, Stroke::new(4.0, colors::BLACK));
+            c.stroke(banner_shape, Stroke::new(4.0, colors::BLACK));
 
             c.fill_text(
                 &font,

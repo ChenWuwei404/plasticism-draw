@@ -76,7 +76,7 @@ pub struct Stroke {
 }
 
 impl Stroke {
-    /// Creates a round-capped, round-joined stroke of `width` logical pixels.
+    /// Creates a round-capped, round-joined stroke of `width` canvas units.
     ///
     /// Negative and non-finite widths are treated as zero.
     pub fn new(width: f64, paint: impl Into<Paint>) -> Self {

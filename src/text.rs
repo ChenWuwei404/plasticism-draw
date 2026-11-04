@@ -53,7 +53,7 @@ impl Font {
             .with_context(|| format!("failed to load font {}", path.display()))
     }
 
-    /// Measures multi-line text at `size` logical pixels per em.
+    /// Measures multi-line text at `size` canvas units per em.
     ///
     /// The returned height uses a line height of `1.2 * size` per line.
     pub fn measure(&self, text: &str, size: f64) -> Size {

@@ -3,29 +3,31 @@
 use vello_gpu::peniko::Fill;
 use vello_gpu::{Resources, Scene};
 
+use crate::dpi::normalize_scale;
 use crate::kurbo::{
     Affine, BezPath, Circle, Ellipse, Line, Point, Rect, RoundedRect, RoundedRectRadii, Shape, Vec2,
 };
 use crate::paint::{Paint, Stroke};
-use crate::r2::r2_rounded_rect_path;
+use crate::r2::R2RoundedRect;
 use crate::text::Font;
 
 const TOLERANCE: f64 = 0.1;
 
-/// A logical-pixel drawing surface.
+/// A drawing surface whose coordinates are canvas units.
 ///
-/// Coordinates are in logical pixels with the origin at the top-left corner
-/// and the y axis pointing down. The application scales the scene by the
-/// window's scale factor internally, so drawing dimensions are independent of
-/// the display's DPI.
+/// Coordinates have their origin at the top-left corner and the y axis
+/// pointing down. By default the window's scale factor is applied internally,
+/// so coordinates are logical pixels independent of the display DPI. Use
+/// [`App::dpi_mode`](crate::App::dpi_mode) to render in physical pixels or at
+/// an explicit scale instead.
 ///
 /// A `Canvas` is only valid for the duration of one render callback. It is
 /// reset at the start of every frame and must not be stored by the callback.
 pub struct Canvas {
     scene: Scene,
     resources: Resources,
-    logical_width: f64,
-    logical_height: f64,
+    canvas_width: f64,
+    canvas_height: f64,
     scale_factor: f64,
     user_transform: Affine,
     open: Vec<Open>,
@@ -46,8 +48,8 @@ impl Canvas {
         Self {
             scene: Scene::new(width, height),
             resources,
-            logical_width: f64::from(width) / scale_factor,
-            logical_height: f64::from(height) / scale_factor,
+            canvas_width: f64::from(width) / scale_factor,
+            canvas_height: f64::from(height) / scale_factor,
             scale_factor,
             user_transform: Affine::IDENTITY,
             open: Vec::new(),
@@ -58,8 +60,8 @@ impl Canvas {
         let width = width.max(1);
         let height = height.max(1);
         self.scale_factor = normalize_scale(scale_factor);
-        self.logical_width = f64::from(width) / self.scale_factor;
-        self.logical_height = f64::from(height) / self.scale_factor;
+        self.canvas_width = f64::from(width) / self.scale_factor;
+        self.canvas_height = f64::from(height) / self.scale_factor;
         self.user_transform = Affine::IDENTITY;
         self.open.clear();
         self.scene.reset_and_resize(width, height);
@@ -79,30 +81,35 @@ impl Canvas {
         (&self.scene, &mut self.resources)
     }
 
-    /// Returns the logical width of the drawable area.
+    /// Returns the width of the drawable area in canvas units.
     pub fn width(&self) -> f64 {
-        self.logical_width
+        self.canvas_width
     }
 
-    /// Returns the logical height of the drawable area.
+    /// Returns the height of the drawable area in canvas units.
     pub fn height(&self) -> f64 {
-        self.logical_height
+        self.canvas_height
     }
 
-    /// Returns the logical size of the drawable area.
+    /// Returns the size of the drawable area in canvas units.
     pub fn size(&self) -> crate::kurbo::Size {
-        crate::kurbo::Size::new(self.logical_width, self.logical_height)
+        crate::kurbo::Size::new(self.canvas_width, self.canvas_height)
     }
 
-    /// Returns the window scale factor (DPI scale).
+    /// Returns the number of physical pixels per canvas unit.
+    ///
+    /// This is the effective scale selected by the application's
+    /// [`DpiMode`](crate::DpiMode): the window's scale factor for
+    /// [`DpiMode::Auto`](crate::DpiMode::Auto), or the fixed value for
+    /// [`DpiMode::Fixed`](crate::DpiMode::Fixed).
     pub fn scale_factor(&self) -> f64 {
         self.scale_factor
     }
 
     /// Replaces the current user transform.
     ///
-    /// The effective transform is the window scale factor multiplied by this
-    /// transform, so coordinates remain logical pixels.
+    /// The effective transform is the canvas DPI scale multiplied by this
+    /// transform, so coordinates remain in canvas units.
     pub fn set_transform(&mut self, transform: Affine) {
         self.user_transform = transform;
         self.apply_transform();
@@ -281,8 +288,7 @@ impl Canvas {
     /// `0.528665 * radius` beyond the nominal tangent points, and is clamped
     /// when it would not fit inside `rect`.
     pub fn fill_r2_rounded_rect(&mut self, rect: Rect, radius: f64, paint: impl Into<Paint>) {
-        let path = r2_rounded_rect_path(rect, radius);
-        self.fill_path(&path, paint);
+        self.fill(R2RoundedRect::from_rect(rect, radius), paint);
     }
 
     /// Strokes an R2 rounded rectangle.
@@ -291,8 +297,7 @@ impl Canvas {
     /// `0.528665 * radius` beyond the nominal tangent points, and is clamped
     /// when it would not fit inside `rect`.
     pub fn stroke_r2_rounded_rect(&mut self, rect: Rect, radius: f64, stroke: impl Into<Stroke>) {
-        let path = r2_rounded_rect_path(rect, radius);
-        self.stroke_path(&path, stroke);
+        self.stroke(R2RoundedRect::from_rect(rect, radius), stroke);
     }
 
     /// Fills a closed polygon. Fewer than three points draw nothing.
@@ -427,14 +432,6 @@ impl Canvas {
     }
 }
 
-fn normalize_scale(scale_factor: f64) -> f64 {
-    if scale_factor.is_finite() && scale_factor > 0.0 {
-        scale_factor
-    } else {
-        1.0
-    }
-}
-
 fn build_path(points: impl IntoIterator<Item = impl Into<Point>>) -> (BezPath, usize) {
     let mut path = BezPath::new();
     let mut count = 0_usize;
@@ -472,7 +469,8 @@ fn polygon_path(
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_scale, polygon_path};
+    use super::polygon_path;
+    use crate::dpi::normalize_scale;
 
     #[test]
     fn scale_factor_is_normalized() {

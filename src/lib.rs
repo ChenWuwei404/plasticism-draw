@@ -48,9 +48,12 @@
 //! }
 //! ```
 //!
-//! Coordinates are logical pixels with the origin at the top-left corner and
-//! the y axis pointing down. The canvas is reset every frame; drawing is
-//! immediate, so the callback should redraw the complete scene each time.
+//! Coordinates are logical pixels by default, with the origin at the top-left
+//! corner and the y axis pointing down. DPI handling is automatic: the scene is
+//! scaled by the window's scale factor. Use [`App::dpi_mode`] to select
+//! [`DpiMode::Fixed`] and render in physical pixels or at an explicit scale
+//! instead. The canvas is reset every frame; drawing is immediate, so the
+//! callback should redraw the complete scene each time.
 //!
 //! Rendering is continuous and paced by vertical synchronization. There is no
 //! fixed frame rate, and [`Frame::delta`] always contains the real time since
@@ -65,14 +68,16 @@
 
 mod app;
 mod canvas;
+mod dpi;
 mod paint;
 mod r2;
 mod text;
 
 pub use app::{App, Frame};
 pub use canvas::Canvas;
+pub use dpi::DpiMode;
 pub use paint::{Paint, Stroke};
-pub use r2::r2_rounded_rect_path;
+pub use r2::{R2RoundedRect, r2_rounded_rect_path};
 pub use text::Font;
 
 pub use vello_gpu::kurbo;
@@ -100,8 +105,8 @@ pub mod prelude {
         RoundedRectRadii, Shape, Size, Vec2,
     };
     pub use crate::{
-        ActiveEventLoop, App, Canvas, Color, ElementState, Font, Frame, Gradient, Key, KeyEvent,
-        NamedKey, Paint, Stroke, Window, WindowEvent, WindowId, colors, kurbo, peniko,
-        r2_rounded_rect_path, winit,
+        ActiveEventLoop, App, Canvas, Color, DpiMode, ElementState, Font, Frame, Gradient, Key,
+        KeyEvent, NamedKey, Paint, R2RoundedRect, Stroke, Window, WindowEvent, WindowId, colors,
+        kurbo, peniko, r2_rounded_rect_path, winit,
     };
 }

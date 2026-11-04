@@ -14,7 +14,7 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
-use crate::{Canvas, Color};
+use crate::{Canvas, Color, DpiMode};
 
 type EventCallback<S> = Box<
     dyn for<'a, 'b, 'c> FnMut(&mut S, &'a WindowEvent, &'b ActiveEventLoop, &'c Window) + 'static,
@@ -40,6 +40,10 @@ pub struct Frame {
 /// Rendering is paced by the surface's vertical synchronization. No fixed
 /// frame rate, sleeps, or manual frame limiter are applied.
 ///
+/// The window is created with a logical inner size. How canvas coordinates map
+/// to physical pixels is selected with [`App::dpi_mode`] and defaults to
+/// [`DpiMode::Auto`].
+///
 /// The optional state parameter is owned by the application and mutably passed
 /// to the event and draw callbacks.
 pub struct App<S = ()> {
@@ -47,6 +51,7 @@ pub struct App<S = ()> {
     width: u32,
     height: u32,
     background: Color,
+    dpi_mode: DpiMode,
     state: S,
     on_event: Option<EventCallback<S>>,
     on_draw: Option<DrawCallback<S>>,
@@ -56,14 +61,17 @@ pub struct App<S = ()> {
 impl App<()> {
     /// Creates an application with a logical window size.
     ///
-    /// The size is specified in logical pixels; the physical surface follows
-    /// the window's current scale factor.
+    /// The window is always created at this logical size, independent of the
+    /// selected [`DpiMode`]. The canvas coordinate size depends on the mode:
+    /// with the default [`DpiMode::Auto`] it equals this size, while fixed
+    /// scales change it according to the physical size of the window.
     pub fn new(title: impl Into<String>, width: u32, height: u32) -> Self {
         Self {
             title: title.into(),
             width: width.max(1),
             height: height.max(1),
             background: Color::WHITE,
+            dpi_mode: DpiMode::Auto,
             state: (),
             on_event: None,
             on_draw: None,
@@ -74,13 +82,15 @@ impl App<()> {
     /// Attaches user-owned mutable state for the callbacks.
     ///
     /// Call this before registering `on_event`, `on_draw`, or `draw`; any
-    /// callbacks already registered for `()` are discarded.
+    /// callbacks already registered for `()` are discarded. The configured DPI
+    /// mode is preserved.
     pub fn state<S: 'static>(self, state: S) -> App<S> {
         App {
             title: self.title,
             width: self.width,
             height: self.height,
             background: self.background,
+            dpi_mode: self.dpi_mode,
             state,
             on_event: None,
             on_draw: None,
@@ -111,6 +121,21 @@ impl<S: 'static> App<S> {
     /// Sets the color used to clear the window before each frame.
     pub fn background(mut self, color: impl Into<Color>) -> Self {
         self.background = color.into();
+        self
+    }
+
+    /// Selects how canvas coordinates map to physical pixels.
+    ///
+    /// The default is [`DpiMode::Auto`], which follows the window's scale
+    /// factor and keeps canvas coordinates in logical pixels. Use
+    /// [`DpiMode::Fixed`] to force a scale independent of the monitor, for
+    /// example `DpiMode::Fixed(1.0)` for one canvas unit per physical pixel.
+    ///
+    /// The window is still created with the logical size passed to
+    /// [`App::new`]; changing the mode only changes the canvas coordinate
+    /// space. See [`DpiMode`] for the resulting canvas sizes.
+    pub fn dpi_mode(mut self, mode: DpiMode) -> Self {
+        self.dpi_mode = mode;
         self
     }
 
@@ -337,7 +362,10 @@ impl<S: 'static> Runner<S> {
             .context("window width exceeds the maximum render target width")?;
         let height = u16::try_from(size.height)
             .context("window height exceeds the maximum render target height")?;
-        let scale_factor = state.window.scale_factor();
+        let scale_factor = self
+            .app
+            .dpi_mode
+            .effective_scale(state.window.scale_factor());
 
         let view = output
             .texture
@@ -496,7 +524,12 @@ impl State {
         );
         let depth_view =
             Renderer::create_depth_texture_view(&device, &RenderSize { width, height });
-        let canvas = Canvas::new(resources, width, height, window.scale_factor());
+        let canvas = Canvas::new(
+            resources,
+            width,
+            height,
+            app.dpi_mode.effective_scale(window.scale_factor()),
+        );
 
         Ok(Self {
             window,
@@ -586,4 +619,32 @@ fn is_srgb(format: wgpu::TextureFormat) -> bool {
         format,
         wgpu::TextureFormat::Rgba8UnormSrgb | wgpu::TextureFormat::Bgra8UnormSrgb
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::App;
+    use crate::DpiMode;
+
+    #[test]
+    fn dpi_mode_defaults_to_auto() {
+        let app = App::new("test", 640, 480);
+        assert_eq!(app.dpi_mode, DpiMode::Auto);
+    }
+
+    #[test]
+    fn dpi_mode_is_preserved_by_state() {
+        let app = App::new("test", 640, 480)
+            .dpi_mode(DpiMode::Fixed(1.0))
+            .state(0_u32);
+        assert_eq!(app.dpi_mode, DpiMode::Fixed(1.0));
+    }
+
+    #[test]
+    fn dpi_mode_can_be_set_after_callbacks() {
+        let app = App::new("test", 640, 480)
+            .draw(|_canvas, _frame| {})
+            .dpi_mode(DpiMode::Fixed(2.0));
+        assert_eq!(app.dpi_mode, DpiMode::Fixed(2.0));
+    }
 }

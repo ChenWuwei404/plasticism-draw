@@ -6,7 +6,9 @@
 //! ends on the right edge. The same profile is rotated/mirrored for the other
 //! three corners.
 
-use crate::kurbo::{Affine, BezPath, Point, Rect};
+use std::ops::{Add, Sub};
+
+use crate::kurbo::{Affine, BezPath, PathEl, Point, Rect, Shape, Size, Vec2};
 
 /// The shoulder extension of the R2 corner profile, as a fraction of `radius`.
 const SHOULDER: f64 = 0.528665;
@@ -18,68 +20,214 @@ const SHOULDER: f64 = 0.528665;
 /// radius units along each edge.
 const CORNER_EXTENT: f64 = 1.0 + SHOULDER;
 
+/// A rectangle with R2 rounded corners.
+///
+/// Construction normalizes the rectangle and clamps `radius` so neighboring
+/// corners cannot overlap. The corner profile uses two cubic Bézier segments
+/// and a short connecting line; see [`r2_rounded_rect_path`] for the geometry.
+///
+/// Unlike a circular [`crate::kurbo::RoundedRect`], the R2 shoulder extends
+/// `0.528665 * radius` beyond the nominal tangent points. A corner therefore
+/// consumes `1.528665 * radius` along both axes.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct R2RoundedRect {
+    rect: Rect,
+    radius: f64,
+}
+
+impl R2RoundedRect {
+    /// Creates a rectangle from minimum and maximum coordinates.
+    ///
+    /// The rectangle and radius are normalized according to
+    /// [`R2RoundedRect::from_rect`].
+    #[inline]
+    pub fn new(x0: f64, y0: f64, x1: f64, y1: f64, radius: f64) -> Self {
+        Self::from_rect(Rect::new(x0, y0, x1, y1), radius)
+    }
+
+    /// Creates a rounded rectangle from a rectangle and an R2 radius.
+    ///
+    /// A reversed rectangle is normalized, and the radius is clamped to fit the
+    /// rectangle. Non-positive or non-finite radii become zero.
+    #[inline]
+    pub fn from_rect(rect: Rect, radius: f64) -> Self {
+        let rect = rect.abs();
+        Self {
+            rect,
+            radius: clamp_radius(rect, radius),
+        }
+    }
+
+    /// Creates a rounded rectangle from two points.
+    #[inline]
+    pub fn from_points(p0: impl Into<Point>, p1: impl Into<Point>, radius: f64) -> Self {
+        Self::from_rect(Rect::from_points(p0, p1), radius)
+    }
+
+    /// Creates a rounded rectangle from an origin and size.
+    #[inline]
+    pub fn from_origin_size(origin: impl Into<Point>, size: impl Into<Size>, radius: f64) -> Self {
+        Self::from_rect(Rect::from_origin_size(origin, size), radius)
+    }
+
+    /// The width of the rectangle.
+    #[inline]
+    pub const fn width(&self) -> f64 {
+        self.rect.width()
+    }
+
+    /// The height of the rectangle.
+    #[inline]
+    pub const fn height(&self) -> f64 {
+        self.rect.height()
+    }
+
+    /// The clamped R2 radius.
+    #[inline]
+    pub const fn radius(&self) -> f64 {
+        self.radius
+    }
+
+    /// The normalized, non-rounded rectangle.
+    #[inline]
+    pub const fn rect(&self) -> Rect {
+        self.rect
+    }
+
+    /// The origin of the rectangle (top-left in a y-down coordinate system).
+    #[inline]
+    pub const fn origin(&self) -> Point {
+        self.rect.origin()
+    }
+
+    /// The center of the rectangle.
+    #[inline]
+    pub const fn center(&self) -> Point {
+        self.rect.center()
+    }
+
+    /// Whether the rectangle and radius are finite.
+    #[inline]
+    pub const fn is_finite(&self) -> bool {
+        self.rect.is_finite() && self.radius.is_finite()
+    }
+
+    /// Whether the rectangle or radius is NaN.
+    #[inline]
+    pub const fn is_nan(&self) -> bool {
+        self.rect.is_nan() || self.radius.is_nan()
+    }
+
+    fn build_path(&self) -> BezPath {
+        if self.radius <= 0.0 {
+            return plain_rect_path(self.rect);
+        }
+
+        let radius = self.radius;
+        let extent = radius * CORNER_EXTENT;
+        let (x0, y0, x1, y1) = (self.rect.x0, self.rect.y0, self.rect.x1, self.rect.y1);
+
+        let mut path = BezPath::new();
+        path.move_to((x0 + extent, y0));
+        path.line_to((x1 - extent, y0));
+
+        // Top-right corner: local +x is screen +x, local +y is screen -y.
+        append_corner(
+            &mut path,
+            Affine::new([radius, 0.0, 0.0, -radius, x1 - radius, y0 + radius]),
+        );
+
+        path.line_to((x1, y1 - extent));
+
+        // Bottom-right corner.
+        append_corner(
+            &mut path,
+            Affine::new([0.0, radius, radius, 0.0, x1 - radius, y1 - radius]),
+        );
+
+        path.line_to((x0 + extent, y1));
+
+        // Bottom-left corner.
+        append_corner(
+            &mut path,
+            Affine::new([-radius, 0.0, 0.0, radius, x0 + radius, y1 - radius]),
+        );
+
+        path.line_to((x0, y0 + extent));
+
+        // Top-left corner.
+        append_corner(
+            &mut path,
+            Affine::new([0.0, -radius, -radius, 0.0, x0 + radius, y0 + radius]),
+        );
+
+        path.close_path();
+        path
+    }
+}
+
+impl Shape for R2RoundedRect {
+    type PathElementsIter<'iter> = std::vec::IntoIter<PathEl>;
+
+    fn path_elements(&self, _tolerance: f64) -> Self::PathElementsIter<'_> {
+        self.build_path().elements().to_vec().into_iter()
+    }
+
+    fn to_path(&self, _tolerance: f64) -> BezPath {
+        self.build_path()
+    }
+
+    fn area(&self) -> f64 {
+        self.build_path().area()
+    }
+
+    fn perimeter(&self, accuracy: f64) -> f64 {
+        self.build_path().perimeter(accuracy)
+    }
+
+    fn winding(&self, point: Point) -> i32 {
+        self.build_path().winding(point)
+    }
+
+    fn bounding_box(&self) -> Rect {
+        self.rect
+    }
+}
+
+impl Add<Vec2> for R2RoundedRect {
+    type Output = R2RoundedRect;
+
+    #[inline]
+    fn add(self, offset: Vec2) -> Self::Output {
+        R2RoundedRect::from_rect(self.rect + offset, self.radius)
+    }
+}
+
+impl Sub<Vec2> for R2RoundedRect {
+    type Output = R2RoundedRect;
+
+    #[inline]
+    fn sub(self, offset: Vec2) -> Self::Output {
+        R2RoundedRect::from_rect(self.rect - offset, self.radius)
+    }
+}
+
 /// Builds the outline of an R2 rounded rectangle.
 ///
-/// `radius` is the `R` from the R2 corner profile. This is not the total
-/// corner size: the profile extends `0.528665 * R` past the nominal tangent
-/// points, so a corner consumes `1.528665 * R` along each axis. Values that
-/// would make adjacent corners overlap are clamped to fit the rectangle.
-///
-/// Non-positive or non-finite radii produce a plain rectangle. A reversed
-/// rectangle is normalized first.
+/// This is the path equivalent of `R2RoundedRect::from_rect(rect, radius)`,
+/// suitable for `Canvas::fill_path`, `Canvas::stroke_path`, or clipping.
 #[must_use]
 pub fn r2_rounded_rect_path(rect: Rect, radius: f64) -> BezPath {
-    let rect = rect.abs();
+    R2RoundedRect::from_rect(rect, radius).build_path()
+}
+
+fn clamp_radius(rect: Rect, radius: f64) -> f64 {
     let max_radius = rect.width().min(rect.height()) / (2.0 * CORNER_EXTENT);
-    let radius = if radius.is_finite() && radius > 0.0 {
+    if radius.is_finite() && radius > 0.0 {
         radius.min(max_radius)
     } else {
         0.0
-    };
-
-    if radius <= 0.0 {
-        return plain_rect_path(rect);
     }
-
-    let extent = radius * CORNER_EXTENT;
-    let (x0, y0, x1, y1) = (rect.x0, rect.y0, rect.x1, rect.y1);
-
-    let mut path = BezPath::new();
-    path.move_to((x0 + extent, y0));
-    path.line_to((x1 - extent, y0));
-
-    // Top-right corner: local +x is screen +x, local +y is screen -y.
-    append_corner(
-        &mut path,
-        Affine::new([radius, 0.0, 0.0, -radius, x1 - radius, y0 + radius]),
-    );
-
-    path.line_to((x1, y1 - extent));
-
-    // Bottom-right corner.
-    append_corner(
-        &mut path,
-        Affine::new([0.0, radius, radius, 0.0, x1 - radius, y1 - radius]),
-    );
-
-    path.line_to((x0 + extent, y1));
-
-    // Bottom-left corner.
-    append_corner(
-        &mut path,
-        Affine::new([-radius, 0.0, 0.0, radius, x0 + radius, y1 - radius]),
-    );
-
-    path.line_to((x0, y0 + extent));
-
-    // Top-left corner.
-    append_corner(
-        &mut path,
-        Affine::new([0.0, -radius, -radius, 0.0, x0 + radius, y0 + radius]),
-    );
-
-    path.close_path();
-    path
 }
 
 fn append_corner(path: &mut BezPath, transform: Affine) {
@@ -114,8 +262,8 @@ fn plain_rect_path(rect: Rect) -> BezPath {
 
 #[cfg(test)]
 mod tests {
-    use super::r2_rounded_rect_path;
-    use crate::kurbo::{PathEl, Point, Rect, Shape};
+    use super::{R2RoundedRect, r2_rounded_rect_path};
+    use crate::kurbo::{PathEl, Point, Rect, Shape, Vec2};
 
     const EPSILON: f64 = 1e-6;
 
@@ -229,5 +377,49 @@ mod tests {
     fn reversed_rectangle_is_normalized() {
         let path = r2_rounded_rect_path(Rect::new(100.0, 80.0, 0.0, 0.0), 15.0);
         assert_rect(path.bounding_box(), Rect::new(0.0, 0.0, 100.0, 80.0));
+    }
+
+    #[test]
+    fn shape_geometry_and_path_agree() {
+        let shape = R2RoundedRect::new(0.0, 0.0, 100.0, 100.0, 20.0);
+        let path = shape.to_path(0.1);
+
+        assert_eq!(shape.rect(), Rect::new(0.0, 0.0, 100.0, 100.0));
+        assert_eq!(shape.width(), 100.0);
+        assert_eq!(shape.height(), 100.0);
+        assert_eq!(shape.radius(), 20.0);
+        assert_eq!(shape.path_elements(0.1).count(), 22);
+        assert_eq!(path.elements().len(), 22);
+        assert_rect(shape.bounding_box(), shape.rect());
+        assert!((shape.area() - path.area()).abs() < EPSILON);
+        assert!((shape.perimeter(0.01) - path.perimeter(0.01)).abs() < EPSILON);
+        assert_eq!(shape.winding(Point::new(50.0, 50.0)), 1);
+        assert_eq!(shape.winding(Point::new(-1.0, 50.0)), 0);
+    }
+
+    #[test]
+    fn shape_constructors_normalize_rectangle_and_radius() {
+        let shape = R2RoundedRect::new(100.0, 80.0, 0.0, 0.0, 10_000.0);
+        let max_radius = 80.0 / (2.0 * 1.528665);
+
+        assert_eq!(shape.rect(), Rect::new(0.0, 0.0, 100.0, 80.0));
+        assert!(shape.radius() <= max_radius + EPSILON);
+        assert!(shape.is_finite());
+        assert!(!shape.is_nan());
+
+        let from_points = R2RoundedRect::from_points((0.0, 0.0), (50.0, 60.0), 10.0);
+        let from_origin = R2RoundedRect::from_origin_size((0.0, 0.0), (50.0, 60.0), 10.0);
+        assert_eq!(from_points, from_origin);
+    }
+
+    #[test]
+    fn translation_keeps_radius_and_normalizes() {
+        let shape = R2RoundedRect::new(0.0, 0.0, 100.0, 100.0, 20.0);
+        let moved = shape + Vec2::new(10.0, 20.0);
+        let back = moved - Vec2::new(10.0, 20.0);
+
+        assert_eq!(moved.rect(), Rect::new(10.0, 20.0, 110.0, 120.0));
+        assert_eq!(back.rect(), shape.rect());
+        assert_eq!(moved.radius(), shape.radius());
     }
 }
