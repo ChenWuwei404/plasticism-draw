@@ -66,11 +66,13 @@
 mod app;
 mod canvas;
 mod paint;
+mod r2;
 mod text;
 
 pub use app::{App, Frame};
 pub use canvas::Canvas;
 pub use paint::{Paint, Stroke};
+pub use r2::r2_rounded_rect_path;
 pub use text::Font;
 
 pub use vello_gpu::kurbo;
@@ -99,6 +101,7 @@ pub mod prelude {
     };
     pub use crate::{
         ActiveEventLoop, App, Canvas, Color, ElementState, Font, Frame, Gradient, Key, KeyEvent,
-        NamedKey, Paint, Stroke, Window, WindowEvent, WindowId, colors, kurbo, peniko, winit,
+        NamedKey, Paint, Stroke, Window, WindowEvent, WindowId, colors, kurbo, peniko,
+        r2_rounded_rect_path, winit,
     };
 }

@@ -7,6 +7,7 @@ use crate::kurbo::{
     Affine, BezPath, Circle, Ellipse, Line, Point, Rect, RoundedRect, RoundedRectRadii, Shape, Vec2,
 };
 use crate::paint::{Paint, Stroke};
+use crate::r2::r2_rounded_rect_path;
 use crate::text::Font;
 
 const TOLERANCE: f64 = 0.1;
@@ -272,6 +273,26 @@ impl Canvas {
         stroke: impl Into<Stroke>,
     ) {
         self.stroke(RoundedRect::from_rect(rect, radii.into()), stroke);
+    }
+
+    /// Fills an R2 rounded rectangle.
+    ///
+    /// `radius` is the `R` from the R2 corner profile. The profile extends
+    /// `0.528665 * radius` beyond the nominal tangent points, and is clamped
+    /// when it would not fit inside `rect`.
+    pub fn fill_r2_rounded_rect(&mut self, rect: Rect, radius: f64, paint: impl Into<Paint>) {
+        let path = r2_rounded_rect_path(rect, radius);
+        self.fill_path(&path, paint);
+    }
+
+    /// Strokes an R2 rounded rectangle.
+    ///
+    /// `radius` is the `R` from the R2 corner profile. The profile extends
+    /// `0.528665 * radius` beyond the nominal tangent points, and is clamped
+    /// when it would not fit inside `rect`.
+    pub fn stroke_r2_rounded_rect(&mut self, rect: Rect, radius: f64, stroke: impl Into<Stroke>) {
+        let path = r2_rounded_rect_path(rect, radius);
+        self.stroke_path(&path, stroke);
     }
 
     /// Fills a closed polygon. Fewer than three points draw nothing.
