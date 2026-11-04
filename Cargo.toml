@@ -11,6 +11,16 @@ path = "src/lib.rs"
 name = "plasticism-draw"
 path = "src/main.rs"
 
+# Keep debug builds responsive. Vello, wgpu, and font shaping are extremely hot
+# in an immediate-mode renderer; compiling them at opt-level 0 makes even simple
+# scenes take tens of milliseconds per frame. The project itself stays at
+# opt-level 1 so backtraces and debugger behavior remain useful.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
 [dependencies]
 anyhow = "1.0.104"
 glifo = "0.4.0"
