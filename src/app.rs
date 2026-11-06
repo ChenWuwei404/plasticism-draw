@@ -342,18 +342,14 @@ impl<S: 'static> ApplicationHandler for Runner<S> {
         }
 
         match event {
-            WindowEvent::Resized(size) => {
-                // A resize changes the surface, not the animation clock. Keep
-                // the previous frame timestamp so continuous resizing does not
-                // produce a stream of zero-delta frames.
-                if let Err(error) = state.resize(size) {
-                    self.fail(event_loop, error);
-                }
-            }
-            WindowEvent::ScaleFactorChanged { .. } => {
-                if let Err(error) = state.sync_size() {
-                    self.fail(event_loop, error);
-                }
+            WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
+                // Do not reconfigure the surface synchronously inside the
+                // window procedure. Windows can deliver a burst of WM_SIZE /
+                // WM_DPICHANGED messages during an interactive resize; doing
+                // GPU work here multiplies that work and can stall the modal
+                // loop. `render` calls `sync_size` once, immediately before it
+                // acquires the next surface texture.
+                state.window.request_redraw();
             }
             WindowEvent::Occluded(occluded) => {
                 if state.occluded != occluded {
@@ -414,24 +410,53 @@ impl<S: 'static> Runner<S> {
         let (output, suboptimal) = match state.surface.get_current_texture() {
             CurrentSurfaceTexture::Success(texture) => (texture, false),
             CurrentSurfaceTexture::Suboptimal(texture) => (texture, true),
-            // Surface acquisition can fail transiently while Windows is in its
-            // modal move/resize loop. Keep the previous draw timestamp so the
-            // next successful frame still measures the real elapsed time.
-            CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => {
+            // A Vulkan swapchain can stop delivering images during an
+            // interactive resize. wgpu reports that as a timeout after one
+            // second; retrying alone leaves the window frozen forever. Reset
+            // the swapchain so the next acquire has fresh images.
+            CurrentSurfaceTexture::Timeout => {
+                let first_timeout = state.acquire_timeouts == 0;
+                state.acquire_timeouts = state.acquire_timeouts.saturating_add(1);
+                if first_timeout {
+                    state.configure_surface()?;
+                } else {
+                    state.acquire_timeouts = 0;
+                    state.recreate_surface()?;
+                }
+                if stats_enabled() {
+                    eprintln!(
+                        "plasticism surface acquire timed out; swapchain {}",
+                        if first_timeout {
+                            "reconfigured"
+                        } else {
+                            "recreated"
+                        }
+                    );
+                }
+                state.window.request_redraw();
+                return Ok(());
+            }
+            CurrentSurfaceTexture::Occluded => {
+                state.window.request_redraw();
                 return Ok(());
             }
             CurrentSurfaceTexture::Outdated => {
                 state.configure_surface()?;
+                state.acquire_timeouts = 0;
+                state.window.request_redraw();
                 return Ok(());
             }
             CurrentSurfaceTexture::Lost => {
                 state.recreate_surface()?;
+                state.acquire_timeouts = 0;
+                state.window.request_redraw();
                 return Ok(());
             }
             CurrentSurfaceTexture::Validation => {
                 return Err(anyhow!("surface texture acquisition failed validation"));
             }
         };
+        state.acquire_timeouts = 0;
 
         let (time, delta) = self.clock.tick(Instant::now());
         let frame = Frame {
@@ -544,6 +569,7 @@ struct State {
     depth_view: wgpu::TextureView,
     texture_bindings: TextureBindings,
     occluded: bool,
+    acquire_timeouts: u32,
 }
 
 impl State {
@@ -557,6 +583,9 @@ impl State {
                 .context("failed to create the application window")?,
         );
 
+        // Let wgpu choose its default backend order. If a Vulkan swapchain
+        // times out during interactive resizing, the render loop resets the
+        // swapchain instead of forcing a different backend.
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -576,6 +605,13 @@ impl State {
         let adapter = request_adapter(false)
             .or_else(|_| request_adapter(true))
             .context("failed to find a compatible GPU adapter")?;
+        if stats_enabled() {
+            let info = adapter.get_info();
+            eprintln!(
+                "plasticism adapter: {:?} · {} · {}",
+                info.backend, info.name, info.driver
+            );
+        }
 
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("plasticism-draw device"),
@@ -653,9 +689,15 @@ impl State {
             depth_view,
             texture_bindings: TextureBindings::new(),
             occluded: false,
+            acquire_timeouts: 0,
         })
     }
 
+    /// Applies a pending window size once per frame.
+    ///
+    /// This is deliberately called from `render`, not from `WM_SIZE` handling,
+    /// so a burst of resize events cannot trigger repeated GPU surface and
+    /// depth-texture reallocations inside the Windows modal resize loop.
     fn sync_size(&mut self) -> Result<()> {
         let size = self.window.inner_size();
         if size.width == 0 || size.height == 0 {
@@ -680,33 +722,6 @@ impl State {
                 height: u16::try_from(size.height).unwrap(),
             },
         );
-        Ok(())
-    }
-
-    fn resize(&mut self, size: winit::dpi::PhysicalSize<u32>) -> Result<()> {
-        if size.width == 0 || size.height == 0 {
-            return Ok(());
-        }
-        if size.width == self.config.width && size.height == self.config.height {
-            return Ok(());
-        }
-
-        u16::try_from(size.width)
-            .context("window width exceeds the maximum render target width")?;
-        u16::try_from(size.height)
-            .context("window height exceeds the maximum render target height")?;
-
-        self.config.width = size.width;
-        self.config.height = size.height;
-        self.configure_surface()?;
-        self.depth_view = Renderer::create_depth_texture_view(
-            &self.device,
-            &RenderSize {
-                width: u16::try_from(size.width).unwrap(),
-                height: u16::try_from(size.height).unwrap(),
-            },
-        );
-        self.window.request_redraw();
         Ok(())
     }
 
