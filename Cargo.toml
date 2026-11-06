@@ -1,7 +1,10 @@
 [package]
 name = "plasticism-draw"
 version = "0.1.0"
+authors = ["ChenWuwei404 <uplantting@163.com>"]
+repository = "https://github.com/ChenWuwei404/plasticism-draw"
 edition = "2024"
+license = "MIT"
 
 [lib]
 name = "plasticism_draw"
@@ -24,8 +27,18 @@ opt-level = 2
 [dependencies]
 anyhow = "1.0.104"
 glifo = "0.4.0"
+image = { version = "0.25.10", default-features = false, features = [
+    "bmp",
+    "gif",
+    "ico",
+    "jpeg",
+    "png",
+    "tiff",
+    "webp",
+] }
 pollster = "1.0.1"
 skrifa = "0.44.0"
+usvg = { version = "0.48.1", default-features = false }
 vello_gpu = { version = "0.3.0", features = ["text"] }
 wgpu = "30.0.1"
 winit = "0.30.13"

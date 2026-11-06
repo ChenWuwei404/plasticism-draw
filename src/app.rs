@@ -1,6 +1,6 @@
 //! Window creation, GPU setup, and the continuous vsync render loop.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
@@ -29,7 +29,9 @@ pub struct Frame {
     /// Time elapsed since the previous render callback started.
     ///
     /// This is `Duration::ZERO` for the first frame, and for the first frame
-    /// after the window was minimized, occluded, or otherwise paused.
+    /// after the window was minimized, occluded, or otherwise paused. Resizing
+    /// the window, moving it between monitors, changing DPI, or a transient
+    /// surface acquisition failure does not reset it.
     pub delta: Duration,
     /// Zero-based index of this rendered frame.
     pub index: u64,
@@ -187,9 +189,9 @@ impl<S: 'static> App<S> {
             app: self,
             state: None,
             error: None,
-            start: Instant::now(),
-            last_frame_start: None,
+            clock: FrameClock::new(),
             next_frame: 0,
+            perf: stats_enabled().then(PerfStats::default),
         };
 
         event_loop
@@ -208,9 +210,91 @@ struct Runner<S> {
     app: App<S>,
     state: Option<State>,
     error: Option<anyhow::Error>,
-    start: Instant,
-    last_frame_start: Option<Instant>,
+    clock: FrameClock,
     next_frame: u64,
+    perf: Option<PerfStats>,
+}
+
+/// Monotonic timing for draw callbacks.
+///
+/// `previous` only advances on frames that actually reach the draw callback.
+/// Resizes, DPI changes, and transient surface errors therefore do not turn
+/// the next frame's delta into zero. Only an explicit pause (initial show,
+/// minimize, or occlusion) resets delta; `time` never resets.
+struct FrameClock {
+    start: Instant,
+    previous: Option<Instant>,
+}
+
+impl FrameClock {
+    fn new() -> Self {
+        Self {
+            start: Instant::now(),
+            previous: None,
+        }
+    }
+
+    fn pause(&mut self) {
+        self.previous = None;
+    }
+
+    fn tick(&mut self, now: Instant) -> (Duration, Duration) {
+        let time = now.saturating_duration_since(self.start);
+        let delta = self.previous.map_or(Duration::ZERO, |previous| {
+            now.saturating_duration_since(previous)
+        });
+        self.previous = Some(now);
+        (time, delta)
+    }
+}
+
+#[derive(Default)]
+struct PerfStats {
+    frames: u32,
+    zero_deltas: u32,
+    draw: Duration,
+    render: Duration,
+    submit: Duration,
+    since: Option<Instant>,
+}
+
+impl PerfStats {
+    fn record(&mut self, delta: Duration, draw: Duration, render: Duration, submit: Duration) {
+        self.frames += 1;
+        self.zero_deltas += u32::from(delta.is_zero());
+        self.draw += draw;
+        self.render += render;
+        self.submit += submit;
+        let Some(since) = self.since else {
+            self.since = Some(Instant::now());
+            return;
+        };
+        if since.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+
+        let frames = f64::from(self.frames);
+        let elapsed = since.elapsed().as_secs_f64();
+        eprintln!(
+            "plasticism stats: {:>6.1} fps | draw {:>6.2} ms | vello {:>6.2} ms | submit+present {:>6.2} ms | zero-dt {}",
+            frames / elapsed,
+            self.draw.as_secs_f64() * 1000.0 / frames,
+            self.render.as_secs_f64() * 1000.0 / frames,
+            self.submit.as_secs_f64() * 1000.0 / frames,
+            self.zero_deltas,
+        );
+        self.frames = 0;
+        self.zero_deltas = 0;
+        self.draw = Duration::ZERO;
+        self.render = Duration::ZERO;
+        self.submit = Duration::ZERO;
+        self.since = Some(Instant::now());
+    }
+}
+
+fn stats_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("PLASTICISM_DRAW_STATS").is_some())
 }
 
 impl<S: 'static> ApplicationHandler for Runner<S> {
@@ -222,7 +306,7 @@ impl<S: 'static> ApplicationHandler for Runner<S> {
         match State::new(event_loop, &self.app) {
             Ok(state) => {
                 self.state = Some(state);
-                self.last_frame_start = None;
+                self.clock.pause();
                 event_loop.set_control_flow(ControlFlow::Poll);
                 if let Some(state) = &self.state {
                     state.window.request_redraw();
@@ -259,20 +343,23 @@ impl<S: 'static> ApplicationHandler for Runner<S> {
 
         match event {
             WindowEvent::Resized(size) => {
-                self.last_frame_start = None;
+                // A resize changes the surface, not the animation clock. Keep
+                // the previous frame timestamp so continuous resizing does not
+                // produce a stream of zero-delta frames.
                 if let Err(error) = state.resize(size) {
                     self.fail(event_loop, error);
                 }
             }
             WindowEvent::ScaleFactorChanged { .. } => {
-                self.last_frame_start = None;
                 if let Err(error) = state.sync_size() {
                     self.fail(event_loop, error);
                 }
             }
             WindowEvent::Occluded(occluded) => {
-                state.occluded = occluded;
-                self.last_frame_start = None;
+                if state.occluded != occluded {
+                    state.occluded = occluded;
+                    self.clock.pause();
+                }
             }
             WindowEvent::RedrawRequested => {
                 if let Err(error) = self.render() {
@@ -300,7 +387,7 @@ impl<S: 'static> ApplicationHandler for Runner<S> {
             state.window.request_redraw();
         } else {
             event_loop.set_control_flow(ControlFlow::Wait);
-            self.last_frame_start = None;
+            self.clock.pause();
         }
     }
 }
@@ -320,25 +407,25 @@ impl<S: 'static> Runner<S> {
         state.sync_size()?;
         let size = state.window.inner_size();
         if size.width == 0 || size.height == 0 {
-            self.last_frame_start = None;
+            self.clock.pause();
             return Ok(());
         }
 
         let (output, suboptimal) = match state.surface.get_current_texture() {
             CurrentSurfaceTexture::Success(texture) => (texture, false),
             CurrentSurfaceTexture::Suboptimal(texture) => (texture, true),
+            // Surface acquisition can fail transiently while Windows is in its
+            // modal move/resize loop. Keep the previous draw timestamp so the
+            // next successful frame still measures the real elapsed time.
             CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => {
-                self.last_frame_start = None;
                 return Ok(());
             }
             CurrentSurfaceTexture::Outdated => {
                 state.configure_surface()?;
-                self.last_frame_start = None;
                 return Ok(());
             }
             CurrentSurfaceTexture::Lost => {
                 state.recreate_surface()?;
-                self.last_frame_start = None;
                 return Ok(());
             }
             CurrentSurfaceTexture::Validation => {
@@ -346,13 +433,9 @@ impl<S: 'static> Runner<S> {
             }
         };
 
-        let now = Instant::now();
-        let delta = self.last_frame_start.map_or(Duration::ZERO, |previous| {
-            now.saturating_duration_since(previous)
-        });
-        self.last_frame_start = Some(now);
+        let (time, delta) = self.clock.tick(Instant::now());
         let frame = Frame {
-            time: now.saturating_duration_since(self.start),
+            time,
             delta,
             index: self.next_frame,
         };
@@ -376,7 +459,15 @@ impl<S: 'static> Runner<S> {
                 label: Some("plasticism-draw frame encoder"),
             });
 
+        state.canvas.upload_pending_images(
+            &mut state.renderer,
+            &state.device,
+            &state.queue,
+            &mut encoder,
+        );
+
         state.canvas.begin_frame(width, height, scale_factor);
+        let draw_start = Instant::now();
         {
             let App {
                 state: app_state,
@@ -389,9 +480,11 @@ impl<S: 'static> Runner<S> {
             draw(app_state, &mut state.canvas, frame);
         }
         state.canvas.finish_frame();
+        let draw_time = draw_start.elapsed();
 
         let render_size = RenderSize { width, height };
         let (scene, resources) = state.canvas.parts();
+        let render_start = Instant::now();
         state
             .renderer
             .render(
@@ -409,14 +502,31 @@ impl<S: 'static> Runner<S> {
                 }),
             )
             .context("Vello GPU failed to render the scene")?;
+        let render_time = render_start.elapsed();
 
+        // Release image atlas slots after the frame that may still reference
+        // them has been recorded. New uploads on the next frame can then reuse
+        // the slots safely.
+        state
+            .canvas
+            .destroy_pending_images(&mut state.renderer, &mut encoder);
+
+        let submit_start = Instant::now();
         state.queue.submit(Some(encoder.finish()));
         state.queue.present(output);
+        let submit_time = submit_start.elapsed();
 
         if suboptimal {
             state.configure_surface()?;
         }
 
+        if let Some(perf) = &mut self.perf {
+            perf.record(delta, draw_time, render_time, submit_time);
+        }
+
+        // Keep the animation alive from inside the redraw callback. During a
+        // Windows modal move/resize loop, `about_to_wait` may not run, but this
+        // request causes WM_PAINT to post the next redraw.
         state.window.request_redraw();
         Ok(())
     }
@@ -623,7 +733,9 @@ fn is_srgb(format: wgpu::TextureFormat) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::App;
+    use std::time::{Duration, Instant};
+
+    use super::{App, FrameClock};
     use crate::DpiMode;
 
     #[test]
@@ -646,5 +758,44 @@ mod tests {
             .draw(|_canvas, _frame| {})
             .dpi_mode(DpiMode::Fixed(2.0));
         assert_eq!(app.dpi_mode, DpiMode::Fixed(2.0));
+    }
+
+    #[test]
+    fn frame_clock_only_resets_delta_on_explicit_pause() {
+        let start = Instant::now();
+        let mut clock = FrameClock {
+            start,
+            previous: None,
+        };
+
+        assert_eq!(clock.tick(start), (Duration::ZERO, Duration::ZERO));
+
+        let first = start + Duration::from_millis(16);
+        assert_eq!(
+            clock.tick(first),
+            (Duration::from_millis(16), Duration::from_millis(16))
+        );
+
+        // A delayed or skipped frame still advances delta by the real elapsed
+        // time instead of reporting zero.
+        let delayed = start + Duration::from_millis(40);
+        assert_eq!(
+            clock.tick(delayed),
+            (Duration::from_millis(40), Duration::from_millis(24))
+        );
+
+        // Pausing for minimize/occlusion resets delta, but not time.
+        clock.pause();
+        let resumed = start + Duration::from_millis(48);
+        assert_eq!(
+            clock.tick(resumed),
+            (Duration::from_millis(48), Duration::ZERO)
+        );
+
+        let after = start + Duration::from_millis(64);
+        assert_eq!(
+            clock.tick(after),
+            (Duration::from_millis(64), Duration::from_millis(16))
+        );
     }
 }

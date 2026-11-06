@@ -55,6 +55,12 @@
 //! instead. The canvas is reset every frame; drawing is immediate, so the
 //! callback should redraw the complete scene each time.
 //!
+//! Bitmaps can be loaded with [`Image`] and drawn scaled with
+//! [`Canvas::draw_image`] or [`Canvas::draw_image_fit`]. [`VectorIcon`] parses
+//! SVG path data or complete SVG documents, and [`Canvas::draw_icon`] fills the
+//! resulting geometry with any [`Paint`]. [`Canvas::draw_bitmap_icon`] uses a
+//! bitmap's alpha channel as a mask for a solid tint color.
+//!
 //! Rendering is continuous and paced by vertical synchronization. There is no
 //! fixed frame rate, and [`Frame::delta`] always contains the real time since
 //! the previous callback.
@@ -69,6 +75,8 @@
 mod app;
 mod canvas;
 mod dpi;
+mod icon;
+mod image;
 mod paint;
 mod r2;
 mod text;
@@ -76,6 +84,8 @@ mod text;
 pub use app::{App, Frame};
 pub use canvas::Canvas;
 pub use dpi::DpiMode;
+pub use icon::VectorIcon;
+pub use image::{Image, ImageFit};
 pub use paint::{Paint, Stroke};
 pub use r2::{R2RoundedRect, r2_rounded_rect_path};
 pub use text::Font;
@@ -105,8 +115,8 @@ pub mod prelude {
         RoundedRectRadii, Shape, Size, Vec2,
     };
     pub use crate::{
-        ActiveEventLoop, App, Canvas, Color, DpiMode, ElementState, Font, Frame, Gradient, Key,
-        KeyEvent, NamedKey, Paint, R2RoundedRect, Stroke, Window, WindowEvent, WindowId, colors,
-        kurbo, peniko, r2_rounded_rect_path, winit,
+        ActiveEventLoop, App, Canvas, Color, DpiMode, ElementState, Font, Frame, Gradient, Image,
+        ImageFit, Key, KeyEvent, NamedKey, Paint, R2RoundedRect, Stroke, VectorIcon, Window,
+        WindowEvent, WindowId, colors, kurbo, peniko, r2_rounded_rect_path, winit,
     };
 }

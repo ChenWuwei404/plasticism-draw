@@ -1,12 +1,16 @@
 //! The drawing surface passed to the render callback.
 
 use glifo::Glyph;
-use vello_gpu::peniko::Fill;
-use vello_gpu::{Resources, Scene};
+use vello_gpu::peniko::{Fill, ImageSampler};
+use vello_gpu::{Image as VelloImage, ImageSource, Renderer, Resources, Scene, Tint, TintMode};
 
+use crate::Color;
 use crate::dpi::normalize_scale;
+use crate::icon::VectorIcon;
+use crate::image::{Image, ImageFit, fitted_rect};
 use crate::kurbo::{
-    Affine, BezPath, Circle, Ellipse, Line, Point, Rect, RoundedRect, RoundedRectRadii, Shape, Vec2,
+    Affine, BezPath, Circle, Ellipse, Line, Point, Rect, RoundedRect, RoundedRectRadii, Shape,
+    Size, Vec2,
 };
 use crate::paint::{Paint, Stroke};
 use crate::r2::R2RoundedRect;
@@ -31,6 +35,7 @@ pub struct Canvas {
     canvas_height: f64,
     scale_factor: f64,
     user_transform: Affine,
+    fill_rule: Fill,
     open: Vec<Open>,
 }
 
@@ -53,6 +58,7 @@ impl Canvas {
             canvas_height: f64::from(height) / scale_factor,
             scale_factor,
             user_transform: Affine::IDENTITY,
+            fill_rule: Fill::NonZero,
             open: Vec::new(),
         }
     }
@@ -64,6 +70,7 @@ impl Canvas {
         self.canvas_width = f64::from(width) / self.scale_factor;
         self.canvas_height = f64::from(height) / self.scale_factor;
         self.user_transform = Affine::IDENTITY;
+        self.fill_rule = Fill::NonZero;
         self.open.clear();
         self.scene.reset_and_resize(width, height);
         self.apply_transform();
@@ -80,6 +87,37 @@ impl Canvas {
 
     pub(crate) fn parts(&mut self) -> (&Scene, &mut Resources) {
         (&self.scene, &mut self.resources)
+    }
+
+    pub(crate) fn upload_pending_images(
+        &mut self,
+        renderer: &mut Renderer,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
+        for image in crate::image::take_pending() {
+            if image.id.get().is_none() {
+                let id = renderer.upload_image(
+                    &mut self.resources,
+                    device,
+                    queue,
+                    encoder,
+                    &image.pixmap,
+                );
+                let _ = image.id.set(id);
+            }
+        }
+    }
+
+    pub(crate) fn destroy_pending_images(
+        &mut self,
+        renderer: &mut Renderer,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
+        for id in crate::image::take_destroyed() {
+            renderer.destroy_image(&mut self.resources, encoder, id);
+        }
     }
 
     /// Returns the width of the drawable area in canvas units.
@@ -192,6 +230,7 @@ impl Canvas {
 
     /// Sets the fill rule used by subsequent fill operations.
     pub fn set_fill_rule(&mut self, fill: Fill) {
+        self.fill_rule = fill;
         self.scene.set_fill_rule(fill);
     }
 
@@ -357,6 +396,100 @@ impl Canvas {
         self.scene.stroke_path(path);
     }
 
+    /// Draws a bitmap stretched to fill `rect`.
+    ///
+    /// The image is uploaded to the GPU automatically and cached. An image
+    /// created inside the current draw callback becomes visible on the next
+    /// frame. Use [`Canvas::draw_image_fit`] to preserve the aspect ratio.
+    pub fn draw_image(&mut self, image: &Image, rect: Rect) {
+        self.draw_image_fit(image, rect, ImageFit::Fill);
+    }
+
+    /// Draws a bitmap fitted into `rect`.
+    ///
+    /// [`ImageFit::Fill`] stretches the image, [`ImageFit::Contain`] keeps the
+    /// aspect ratio and leaves empty space, and [`ImageFit::Cover`] keeps the
+    /// aspect ratio and crops the overflow. The result is centered.
+    pub fn draw_image_fit(&mut self, image: &Image, rect: Rect, fit: ImageFit) {
+        let Some(id) = image.gpu_id() else {
+            image.request_upload();
+            return;
+        };
+
+        let source = image.size();
+        let Some(dst) = fitted_rect(source, rect, fit) else {
+            return;
+        };
+
+        self.scene.set_paint(VelloImage {
+            image: ImageSource::opaque_id_with_transparency_hint(id, image.may_have_transparency()),
+            sampler: ImageSampler::default(),
+        });
+        self.scene.set_paint_transform(image_transform(source, dst));
+
+        if fit == ImageFit::Cover {
+            self.push_clip(rect.abs());
+            self.scene.fill_rect(&dst);
+            self.pop_clip();
+        } else {
+            self.scene.fill_rect(&dst);
+        }
+
+        self.scene.reset_paint_transform();
+    }
+
+    /// Draws a vector icon fitted into `rect` with the supplied paint.
+    ///
+    /// The icon is scaled proportionally and centered. Its internal view box is
+    /// mapped to a rectangle with the same aspect ratio as the icon, so a
+    /// non-square destination leaves empty space rather than distorting the
+    /// icon.
+    pub fn draw_icon(&mut self, icon: &VectorIcon, rect: Rect, paint: impl Into<Paint>) {
+        let Some(transform) = icon.transform_for(rect, ImageFit::Contain) else {
+            return;
+        };
+
+        let paint = paint.into();
+        let previous_fill_rule = self.fill_rule;
+        for part in icon.parts() {
+            let mut path = part.path.clone();
+            path.apply_affine(transform);
+            self.set_fill_rule(part.fill);
+            self.fill_path(&path, paint.clone());
+        }
+        self.set_fill_rule(previous_fill_rule);
+    }
+
+    /// Draws a bitmap icon by using its alpha channel as a mask.
+    ///
+    /// Every fragment of the image is replaced by `color`, weighted by the
+    /// source alpha. The icon is scaled proportionally, centered, and fitted
+    /// into `rect`. Only the alpha channel of the bitmap is used.
+    pub fn draw_bitmap_icon(&mut self, image: &Image, rect: Rect, color: impl Into<Color>) {
+        let Some(id) = image.gpu_id() else {
+            image.request_upload();
+            return;
+        };
+
+        let source = image.size();
+        let Some(dst) = fitted_rect(source, rect, ImageFit::Contain) else {
+            return;
+        };
+
+        self.scene.set_paint(VelloImage {
+            image: ImageSource::opaque_id_with_transparency_hint(id, true),
+            sampler: ImageSampler::default(),
+        });
+        self.scene.set_paint_transform(image_transform(source, dst));
+        self.scene.set_tint(Some(Tint {
+            color: color.into(),
+            mode: TintMode::AlphaMask,
+        }));
+        self.scene.fill_rect(&dst);
+        self.scene.reset_tint();
+        self.scene.reset_paint_transform();
+    }
+
     /// Fills multi-line text.
     ///
     /// `baseline` is the baseline of the first line. Newline characters start
@@ -433,6 +566,11 @@ impl Canvas {
         self.scene
             .set_transform(Affine::scale(self.scale_factor) * self.user_transform);
     }
+}
+
+fn image_transform(source: Size, dst: Rect) -> Affine {
+    Affine::translate((dst.x0, dst.y0))
+        * Affine::scale_non_uniform(dst.width() / source.width, dst.height() / source.height)
 }
 
 fn build_path(points: impl IntoIterator<Item = impl Into<Point>>) -> (BezPath, usize) {
