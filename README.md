@@ -98,7 +98,8 @@ fn main() -> anyhow::Result<()> {
   - Bezier path
 - Fill and Stroke
 - Transform, clip and opacity
-- Vsync render
+- Mailbox presentation when supported, avoiding FIFO acquire stalls during window resizing; fallback is AutoVsync
+- No built-in frame cap with Mailbox; throttle redraws in the application if needed
 - Basic text render
 - Bitmap images
   - PNG, JPEG, WebP, BMP, GIF, ICO and TIFF loading

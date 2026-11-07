@@ -647,13 +647,29 @@ impl State {
             .find(|mode| *mode == wgpu::CompositeAlphaMode::Opaque)
             .unwrap_or(wgpu::CompositeAlphaMode::Auto);
 
+        // FIFO's get_current_texture can stall during Windows modal resizing
+        // (the presentation queue stops draining). Mailbox avoids that wait.
+        // Applications that want a hard frame cap can throttle their redraw
+        // loop externally; this library intentionally imposes no cap.
+        let present_mode = if capabilities
+            .present_modes
+            .contains(&wgpu::PresentMode::Mailbox)
+        {
+            wgpu::PresentMode::Mailbox
+        } else {
+            wgpu::PresentMode::AutoVsync
+        };
+        if stats_enabled() {
+            eprintln!("plasticism present mode: {present_mode:?}");
+        }
+
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             color_space: wgpu::SurfaceColorSpace::Auto,
             width: size.width,
             height: size.height,
-            present_mode: wgpu::PresentMode::AutoVsync,
+            present_mode,
             desired_maximum_frame_latency: 2,
             alpha_mode,
             view_formats: Vec::new(),
