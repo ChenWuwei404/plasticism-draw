@@ -324,18 +324,20 @@ impl Canvas {
 
     /// Fills an R2 rounded rectangle.
     ///
-    /// `radius` is the `R` from the R2 corner profile. The profile extends
-    /// `0.528665 * radius` beyond the nominal tangent points, and is clamped
-    /// when it would not fit inside `rect`.
+    /// `radius` is the `R` from the R2 corner profile. While it fits, the
+    /// profile extends `0.528665 * radius` beyond the nominal tangent points.
+    /// Larger radii shrink the shoulder adaptively toward a quarter circle and
+    /// are clamped at half the shorter side of `rect`.
     pub fn fill_r2_rounded_rect(&mut self, rect: Rect, radius: f64, paint: impl Into<Paint>) {
         self.fill(R2RoundedRect::from_rect(rect, radius), paint);
     }
 
     /// Strokes an R2 rounded rectangle.
     ///
-    /// `radius` is the `R` from the R2 corner profile. The profile extends
-    /// `0.528665 * radius` beyond the nominal tangent points, and is clamped
-    /// when it would not fit inside `rect`.
+    /// `radius` is the `R` from the R2 corner profile. While it fits, the
+    /// profile extends `0.528665 * radius` beyond the nominal tangent points.
+    /// Larger radii shrink the shoulder adaptively toward a quarter circle and
+    /// are clamped at half the shorter side of `rect`.
     pub fn stroke_r2_rounded_rect(&mut self, rect: Rect, radius: f64, stroke: impl Into<Stroke>) {
         self.stroke(R2RoundedRect::from_rect(rect, radius), stroke);
     }

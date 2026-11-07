@@ -12,7 +12,7 @@ fn main() -> anyhow::Result<()> {
             phase += frame.delta.as_secs_f64();
 
             let left_shape = R2RoundedRect::new(60.0, 64.0, 440.0, 284.0, 48.0);
-            let right_shape = R2RoundedRect::new(520.0, 64.0, 900.0, 284.0, 60.0);
+            let right_shape = R2RoundedRect::new(520.0, 64.0, 900.0, 284.0, 110.0);
             let banner_shape = R2RoundedRect::new(60.0, 336.0, 900.0, 580.0, 56.0);
 
             let left = left_shape.rect();
@@ -80,7 +80,7 @@ fn main() -> anyhow::Result<()> {
             );
             c.fill_text(
                 &font,
-                "R = 60",
+                "R = 110 (max)",
                 (right.x0, right.y1 + 46.0),
                 22.0,
                 colors::DIM_GRAY,

@@ -18,7 +18,7 @@ use plasticism_draw::winit::window::CursorIcon;
 const DPI_MODE: DpiMode = DpiMode::Auto;
 
 const MIN_RADIUS: f64 = 6.0;
-const MAX_RADIUS: f64 = 72.0;
+const MAX_RADIUS: f64 = 120.0;
 const WHEEL_STEP: f64 = 5.0;
 
 const MARGIN: f64 = 56.0;
