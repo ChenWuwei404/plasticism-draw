@@ -55,6 +55,12 @@
 //! instead. The canvas is reset every frame; drawing is immediate, so the
 //! callback should redraw the complete scene each time.
 //!
+//! Windows show the system title bar by default. [`App::frameless`] removes it
+//! while keeping the native top-level window behavior: on Windows, system
+//! minimize, maximize, restore, and snap animations still run, and the window
+//! keeps its drop shadow. The application then draws and handles its own title
+//! bar; see the `frameless` example.
+//!
 //! Bitmaps can be loaded with [`Image`] and drawn scaled with
 //! [`Canvas::draw_image`] or [`Canvas::draw_image_fit`]. [`VectorIcon`] parses
 //! SVG path data or complete SVG documents, and [`Canvas::draw_icon`] fills the

@@ -12,6 +12,8 @@ use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+#[cfg(target_os = "windows")]
+use winit::platform::windows::WindowAttributesExtWindows;
 use winit::window::{Window, WindowId};
 
 use crate::{Canvas, Color, DpiMode};
@@ -54,6 +56,7 @@ pub struct App<S = ()> {
     height: u32,
     background: Color,
     dpi_mode: DpiMode,
+    frameless: bool,
     state: S,
     on_event: Option<EventCallback<S>>,
     on_draw: Option<DrawCallback<S>>,
@@ -74,6 +77,7 @@ impl App<()> {
             height: height.max(1),
             background: Color::WHITE,
             dpi_mode: DpiMode::Auto,
+            frameless: false,
             state: (),
             on_event: None,
             on_draw: None,
@@ -85,7 +89,7 @@ impl App<()> {
     ///
     /// Call this before registering `on_event`, `on_draw`, or `draw`; any
     /// callbacks already registered for `()` are discarded. The configured DPI
-    /// mode is preserved.
+    /// mode and frameless setting are preserved.
     pub fn state<S: 'static>(self, state: S) -> App<S> {
         App {
             title: self.title,
@@ -93,6 +97,7 @@ impl App<()> {
             height: self.height,
             background: self.background,
             dpi_mode: self.dpi_mode,
+            frameless: self.frameless,
             state,
             on_event: None,
             on_draw: None,
@@ -138,6 +143,30 @@ impl<S: 'static> App<S> {
     /// space. See [`DpiMode`] for the resulting canvas sizes.
     pub fn dpi_mode(mut self, mode: DpiMode) -> Self {
         self.dpi_mode = mode;
+        self
+    }
+
+    /// Removes the system title bar while keeping the native window behavior.
+    ///
+    /// On Windows the window is still created as a normal top-level window. The
+    /// native frame styles are kept and only the non-client area is removed, so
+    /// the system minimize, maximize, restore, and snap animations keep
+    /// working, and the window keeps its system drop shadow. The window can
+    /// still be moved, resized, and restored like any other window.
+    ///
+    /// The trade-off is that the system title bar and its hit testing are gone.
+    /// The application is responsible for drawing its own title bar and for
+    /// handling dragging, minimizing, maximizing, closing, and resizing the
+    /// window from its edges. See the `frameless` example for a complete custom
+    /// title bar.
+    ///
+    /// On other platforms this creates a plain undecorated window with
+    /// `WindowAttributes::with_decorations(false)`; window animations are then
+    /// left to the platform compositor.
+    ///
+    /// This setting only affects window creation. It is off by default.
+    pub fn frameless(mut self, frameless: bool) -> Self {
+        self.frameless = frameless;
         self
     }
 
@@ -576,7 +605,20 @@ impl State {
     fn new<S>(event_loop: &ActiveEventLoop, app: &App<S>) -> Result<Self> {
         let attributes = Window::default_attributes()
             .with_title(&app.title)
-            .with_inner_size(LogicalSize::new(app.width, app.height));
+            .with_inner_size(LogicalSize::new(app.width, app.height))
+            .with_decorations(!app.frameless);
+
+        // An undecorated window keeps its drop shadow. winit implements
+        // undecorated windows on Windows by keeping the native frame styles and
+        // overriding `WM_NCCALCSIZE`, not by using `WS_POPUP`, so DWM
+        // transitions and the system shadow remain available.
+        #[cfg(target_os = "windows")]
+        let attributes = if app.frameless {
+            attributes.with_undecorated_shadow(true)
+        } else {
+            attributes
+        };
+
         let window = Arc::new(
             event_loop
                 .create_window(attributes)
@@ -789,6 +831,26 @@ mod tests {
             .draw(|_canvas, _frame| {})
             .dpi_mode(DpiMode::Fixed(2.0));
         assert_eq!(app.dpi_mode, DpiMode::Fixed(2.0));
+    }
+
+    #[test]
+    fn frameless_defaults_to_false() {
+        let app = App::new("test", 640, 480);
+        assert!(!app.frameless);
+    }
+
+    #[test]
+    fn frameless_is_preserved_by_state() {
+        let app = App::new("test", 640, 480).frameless(true).state(0_u32);
+        assert!(app.frameless);
+    }
+
+    #[test]
+    fn frameless_can_be_set_after_callbacks() {
+        let app = App::new("test", 640, 480)
+            .draw(|_canvas, _frame| {})
+            .frameless(true);
+        assert!(app.frameless);
     }
 
     #[test]
