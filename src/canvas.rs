@@ -1,6 +1,6 @@
 //! The drawing surface passed to the render callback.
 
-use glifo::Glyph;
+use glifo::{FontEmbolden, Glyph};
 use vello_gpu::peniko::{Fill, ImageSampler};
 use vello_gpu::{Image as VelloImage, ImageSource, Renderer, Resources, Scene, Tint, TintMode};
 
@@ -9,12 +9,12 @@ use crate::dpi::normalize_scale;
 use crate::icon::VectorIcon;
 use crate::image::{Image, ImageFit, fitted_rect};
 use crate::kurbo::{
-    Affine, BezPath, Circle, Ellipse, Line, Point, Rect, RoundedRect, RoundedRectRadii, Shape,
-    Size, Vec2,
+    Affine, BezPath, Circle, Diagonal2, Ellipse, Line, Point, Rect, RoundedRect, RoundedRectRadii,
+    Shape, Size, Vec2,
 };
 use crate::paint::{Paint, Stroke};
 use crate::r2::R2RoundedRect;
-use crate::text::Font;
+use crate::text::{Font, TextLayout, TextStyle};
 
 const TOLERANCE: f64 = 0.1;
 
@@ -492,11 +492,14 @@ impl Canvas {
         self.scene.reset_paint_transform();
     }
 
-    /// Fills multi-line text.
+    /// Fills multi-line text with the default style.
     ///
-    /// `baseline` is the baseline of the first line. Newline characters start
-    /// a new line, and each line uses a line height of `1.2 * size`. Glyphs
-    /// missing from the font render as `.notdef`.
+    /// `baseline` is the first baseline; its x coordinate is the start edge
+    /// (the right edge for right-to-left text). Newline characters start a new
+    /// line, and each line uses a line height of `1.2 * size`. Text is shaped
+    /// by the platform text engine, so kerning, ligatures, and font fallback
+    /// are applied automatically. Use [`Canvas::fill_text_styled`] for explicit
+    /// alignment and wrapping.
     pub fn fill_text(
         &mut self,
         font: &Font,
@@ -505,30 +508,14 @@ impl Canvas {
         size: f64,
         paint: impl Into<Paint>,
     ) {
-        let layout = font.layout(text, size);
-        if layout.glyphs.is_empty() {
-            return;
-        }
-
-        let baseline = baseline.into();
-        let glyphs = layout.glyphs.iter().map(|glyph| Glyph {
-            id: glyph.id,
-            x: glyph.x + baseline.x as f32,
-            y: glyph.y + baseline.y as f32,
-        });
-
-        self.scene.set_paint(paint.into().into_inner());
-        let _ = self
-            .scene
-            .glyph_run(&mut self.resources, font.data())
-            .font_size(size as f32)
-            .atlas_cache(true)
-            .fill_glyphs(glyphs);
+        let layout = font.layout(text, &TextStyle::new(size));
+        self.fill_text_layout(&layout, baseline, paint);
     }
 
-    /// Strokes multi-line text.
+    /// Strokes multi-line text with the default style.
     ///
     /// The stroke's paint and width are used for the glyph outlines.
+    /// `baseline` follows the same anchor semantics as [`Canvas::fill_text`].
     pub fn stroke_text(
         &mut self,
         font: &Font,
@@ -537,26 +524,137 @@ impl Canvas {
         size: f64,
         stroke: impl Into<Stroke>,
     ) {
-        let layout = font.layout(text, size);
-        if layout.glyphs.is_empty() {
-            return;
+        let layout = font.layout(text, &TextStyle::new(size));
+        self.stroke_text_layout(&layout, baseline, stroke);
+    }
+
+    /// Fills text with an explicit style.
+    ///
+    /// The anchor follows [`TextLayout`] semantics: `anchor.y` is the first
+    /// baseline and `anchor.x` is the alignment edge selected by the style.
+    pub fn fill_text_styled(
+        &mut self,
+        font: &Font,
+        text: &str,
+        style: &TextStyle,
+        anchor: impl Into<Point>,
+        paint: impl Into<Paint>,
+    ) {
+        let layout = font.layout(text, style);
+        self.fill_text_layout(&layout, anchor, paint);
+    }
+
+    /// Strokes text with an explicit style.
+    ///
+    /// The anchor follows [`TextLayout`] semantics.
+    pub fn stroke_text_styled(
+        &mut self,
+        font: &Font,
+        text: &str,
+        style: &TextStyle,
+        anchor: impl Into<Point>,
+        stroke: impl Into<Stroke>,
+    ) {
+        let layout = font.layout(text, style);
+        self.stroke_text_layout(&layout, anchor, stroke);
+    }
+
+    /// Fills a laid-out text.
+    ///
+    /// `anchor.y` is the first baseline and `anchor.x` is the alignment edge
+    /// selected by the style. Rich-text spans that carry a color use it;
+    /// uncolored spans use `paint`.
+    pub fn fill_text_layout(
+        &mut self,
+        layout: &TextLayout,
+        anchor: impl Into<Point>,
+        paint: impl Into<Paint>,
+    ) {
+        let anchor = anchor.into();
+        let fallback = paint.into();
+
+        for run in layout.runs() {
+            if run.glyphs.is_empty() {
+                continue;
+            }
+            let paint = match run.color {
+                Some(color) => Paint::solid(color),
+                None => fallback.clone(),
+            };
+            self.fill_text_run(run, anchor, &paint);
+        }
+    }
+
+    /// Strokes a laid-out text with a single stroke style.
+    ///
+    /// Per-span fill colors do not affect the stroke; every run uses `stroke`.
+    pub fn stroke_text_layout(
+        &mut self,
+        layout: &TextLayout,
+        anchor: impl Into<Point>,
+        stroke: impl Into<Stroke>,
+    ) {
+        let anchor = anchor.into();
+        let stroke = stroke.into();
+
+        for run in layout.runs() {
+            if run.glyphs.is_empty() {
+                continue;
+            }
+            self.stroke_text_run(run, anchor, &stroke);
+        }
+    }
+
+    fn fill_text_run(&mut self, run: &crate::text::TextRunData, anchor: Point, paint: &Paint) {
+        self.scene.set_paint(paint.clone().into_inner());
+
+        let mut builder = self
+            .scene
+            .glyph_run(&mut self.resources, &run.font)
+            .font_size(run.font_size)
+            .atlas_cache(true);
+        if !run.normalized_coords.is_empty() {
+            builder = builder.normalized_coords(&run.normalized_coords);
+        }
+        if let Some(amount) = run.embolden {
+            builder = builder.font_embolden(synthetic_bold(amount));
+        }
+        if let Some(angle) = run.skew {
+            builder = builder.glyph_transform(synthetic_skew(angle));
         }
 
-        let stroke = stroke.into();
-        let baseline = baseline.into();
-        let glyphs = layout.glyphs.iter().map(|glyph| Glyph {
+        let glyphs = run.glyphs.iter().map(|glyph| Glyph {
             id: glyph.id,
-            x: glyph.x + baseline.x as f32,
-            y: glyph.y + baseline.y as f32,
+            x: glyph.x + anchor.x as f32,
+            y: glyph.y + anchor.y as f32,
         });
+        let _ = builder.fill_glyphs(glyphs);
+    }
 
-        self.apply_stroke(&stroke);
-        let _ = self
+    fn stroke_text_run(&mut self, run: &crate::text::TextRunData, anchor: Point, stroke: &Stroke) {
+        self.apply_stroke(stroke);
+
+        let mut builder = self
             .scene
-            .glyph_run(&mut self.resources, font.data())
-            .font_size(size as f32)
-            .atlas_cache(true)
-            .stroke_glyphs(glyphs);
+            .glyph_run(&mut self.resources, &run.font)
+            .font_size(run.font_size)
+            .atlas_cache(true);
+        if !run.normalized_coords.is_empty() {
+            builder = builder.normalized_coords(&run.normalized_coords);
+        }
+        if let Some(amount) = run.embolden {
+            builder = builder.font_embolden(synthetic_bold(amount));
+        }
+        if let Some(angle) = run.skew {
+            builder = builder.glyph_transform(synthetic_skew(angle));
+        }
+
+        let glyphs = run.glyphs.iter().map(|glyph| Glyph {
+            id: glyph.id,
+            x: glyph.x + anchor.x as f32,
+            y: glyph.y + anchor.y as f32,
+        });
+        let _ = builder.stroke_glyphs(glyphs);
     }
 
     fn apply_stroke(&mut self, stroke: &Stroke) {
@@ -568,6 +666,22 @@ impl Canvas {
         self.scene
             .set_transform(Affine::scale(self.scale_factor) * self.user_transform);
     }
+}
+
+fn synthetic_bold(amount: f32) -> FontEmbolden {
+    // `kurbo::expand_path` inverts the expansion matrix. A zero y factor
+    // becomes infinity and corrupts quadratic outlines, which makes glyphs
+    // with curves disappear. Expand both axes even though faux bold is
+    // mostly horizontal.
+    let amount = f64::from(amount);
+    FontEmbolden::new(Diagonal2::new(amount, amount))
+}
+
+fn synthetic_skew(angle: f32) -> Affine {
+    // Layout coordinates are y-down, so a positive skew factor pushes points
+    // above the baseline to the left. Negate the angle for a normal
+    // right-leaning italic.
+    Affine::skew(-f64::from(angle).to_radians().tan(), 0.0)
 }
 
 fn image_transform(source: Size, dst: Rect) -> Affine {

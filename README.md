@@ -2,7 +2,7 @@
 
 A simple way to draw not only simple shapes on canvas.
 
-Based on `winit` and `vello`, `plasticism-draw` provides raw winit event handler and kurbo drawing functions.
+Based on `winit`, `vello`, and `parley`, `plasticism-draw` provides raw winit event handler, kurbo drawing functions, and a complete text layout stack.
 
 ## Quick Start
 
@@ -34,10 +34,12 @@ cargo run --example r2_rounded     # R2 rounded rect
 cargo run --example r2_interactive # interactive R2 rounded rect
 cargo run --example animation      # animation based on delta
 cargo run --example text           # text
+cargo run --example text_layout    # shaping, fallback, wrapping, rich text and metrics
 cargo run --example image          # bitmap loading, scaling, fit modes and alpha icons
 cargo run --example icons          # vector SVG icons and alpha-mask bitmap icons
 cargo run --example events         # raw winit events
 cargo run --example dpi -- 1.0     # DPI modes（Auto / Fixed）
+cargo run --example frameless      # frameless window with a custom title bar
 cargo run --example generic_state  # App<S> generic
 ```
 
@@ -88,6 +90,7 @@ fn main() -> anyhow::Result<()> {
 ## Features
 
 - Configurable DPI mode
+- Frameless windows with native window animations and system shadow
 - Draw functions on canvas
   - Rect
   - Rounded rect
@@ -100,7 +103,15 @@ fn main() -> anyhow::Result<()> {
 - Transform, clip and opacity
 - Mailbox presentation when supported, avoiding FIFO acquire stalls during window resizing; fallback is AutoVsync
 - No built-in frame cap with Mailbox; throttle redraws in the application if needed
-- Basic text render
+- Text shaping and layout
+  - Parley shaping with kerning, ligatures, variable axes, and synthetic bold/italic
+  - Automatic system-font fallback for missing glyphs
+  - Font weight, italic/oblique, width, OpenType features, and variation axes
+  - Absolute or relative line height, letter spacing, and word spacing
+  - Start/End/Left/Center/Right/Justify alignment
+  - Width-based wrapping with Unicode line breaking and bidirectional text
+  - Rich text spans with per-range style, font family, and fill color
+  - Cached `TextLayout`, plus font, text, line, and run metrics
 - Bitmap images
   - PNG, JPEG, WebP, BMP, GIF, ICO and TIFF loading
   - Scaling through the destination rectangle

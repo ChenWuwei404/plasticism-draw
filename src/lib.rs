@@ -67,6 +67,16 @@
 //! resulting geometry with any [`Paint`]. [`Canvas::draw_bitmap_icon`] uses a
 //! bitmap's alpha channel as a mask for a solid tint color.
 //!
+//! Text is shaped and laid out by parley. [`Font`] loads a face and registers
+//! its family for layout with automatic system-font fallback.
+//! [`TextStyle`] selects size, weight, italic/oblique, width, variable axes,
+//! OpenType features, line height, spacing, alignment, and wrapping.
+//! [`Font::layout`] returns a cached [`TextLayout`], while [`RichText`] adds
+//! per-range styles, colors, and font families. Draw with
+//! [`Canvas::fill_text_layout`] or [`Canvas::stroke_text_layout`]; metrics are
+//! available from [`FontMetrics`], [`TextMetrics`], [`LineMetrics`], and
+//! [`RunMetrics`].
+//!
 //! Rendering is continuous and paced by vertical synchronization. There is no
 //! fixed frame rate, and [`Frame::delta`] always contains the real time since
 //! the previous callback.
@@ -94,7 +104,10 @@ pub use icon::VectorIcon;
 pub use image::{Image, ImageFit};
 pub use paint::{Paint, Stroke};
 pub use r2::{R2RoundedRect, r2_rounded_rect_path};
-pub use text::Font;
+pub use text::{
+    Font, FontFeature, FontMetrics, FontStyle, FontVariation, FontWeight, FontWidth, GenericFamily,
+    LineMetrics, RichText, RunMetrics, Tag, TextAlign, TextLayout, TextMetrics, TextStyle,
+};
 
 pub use vello_gpu::kurbo;
 pub use vello_gpu::peniko;
@@ -121,8 +134,10 @@ pub mod prelude {
         RoundedRectRadii, Shape, Size, Vec2,
     };
     pub use crate::{
-        ActiveEventLoop, App, Canvas, Color, DpiMode, ElementState, Font, Frame, Gradient, Image,
-        ImageFit, Key, KeyEvent, NamedKey, Paint, R2RoundedRect, Stroke, VectorIcon, Window,
+        ActiveEventLoop, App, Canvas, Color, DpiMode, ElementState, Font, FontFeature, FontMetrics,
+        FontStyle, FontVariation, FontWeight, FontWidth, Frame, GenericFamily, Gradient, Image,
+        ImageFit, Key, KeyEvent, LineMetrics, NamedKey, Paint, R2RoundedRect, RichText, RunMetrics,
+        Stroke, Tag, TextAlign, TextLayout, TextMetrics, TextStyle, VectorIcon, Window,
         WindowEvent, WindowId, colors, kurbo, peniko, r2_rounded_rect_path, winit,
     };
 }

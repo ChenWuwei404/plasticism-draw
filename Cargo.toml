@@ -29,6 +29,12 @@ opt-level = 2
 [dependencies]
 anyhow = "1.0.104"
 glifo = "0.4.0"
+# Route ICU data warnings through `log` instead of `eprintln!`. Without the
+# `logging` feature, CJK segmentation prints "No segmentation model..." to
+# stderr on every layout.
+icu_provider = { version = "2.4.0", default-features = false, features = [
+    "logging",
+] }
 image = { version = "0.25.10", default-features = false, features = [
     "bmp",
     "gif",
@@ -38,6 +44,7 @@ image = { version = "0.25.10", default-features = false, features = [
     "tiff",
     "webp",
 ] }
+parley = "0.11.0"
 pollster = "1.0.1"
 skrifa = "0.44.0"
 usvg = { version = "0.48.1", default-features = false }
