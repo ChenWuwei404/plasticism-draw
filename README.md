@@ -40,6 +40,7 @@ cargo run --example icons          # vector SVG icons and alpha-mask bitmap icon
 cargo run --example events         # raw winit events
 cargo run --example dpi -- 1.0     # DPI modes（Auto / Fixed）
 cargo run --example frameless      # frameless window with a custom title bar
+cargo run --example transparent    # per-pixel window transparency
 cargo run --example generic_state  # App<S> generic
 ```
 
@@ -91,6 +92,7 @@ fn main() -> anyhow::Result<()> {
 
 - Configurable DPI mode
 - Frameless windows with native window animations and system shadow
+- Per-pixel window transparency with alpha-aware clearing
 - Draw functions on canvas
   - Rect
   - Rounded rect

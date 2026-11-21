@@ -61,6 +61,20 @@
 //! keeps its drop shadow. The application then draws and handles its own title
 //! bar; see the `frameless` example.
 //!
+//! Windows are opaque by default. [`App::transparent`] enables per-pixel alpha:
+//! the frame is cleared to a transparent background, every paint blends into
+//! whatever is behind the window, and pixels that are never painted stay fully
+//! transparent. There is no separate mask or alpha buffer; alpha is just the
+//! alpha of the [`App::background`] clear and of the painted colors, including
+//! [`Canvas::with_opacity`] groups. Antialiased edges and rounded corners fade
+//! into the desktop, and a hole is made by clipping or by an even-odd path,
+//! because source-over blending cannot erase pixels. Per-pixel alpha is a
+//! presentation feature: on Windows the DX12 and OpenGL backends do not expose
+//! it, so an adapter that can present premultiplied alpha (in practice Vulkan)
+//! is selected; without one the window stays opaque and a warning is printed.
+//! Transparent areas still receive input; see
+//! [`Window::set_cursor_hittest`](winit::window::Window::set_cursor_hittest).
+//!
 //! Bitmaps can be loaded with [`Image`] and drawn scaled with
 //! [`Canvas::draw_image`] or [`Canvas::draw_image_fit`]. [`VectorIcon`] parses
 //! SVG path data or complete SVG documents, and [`Canvas::draw_icon`] fills the

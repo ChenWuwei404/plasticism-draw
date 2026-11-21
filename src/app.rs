@@ -50,11 +50,14 @@ pub struct Frame {
 ///
 /// The optional state parameter is owned by the application and mutably passed
 /// to the event and draw callbacks.
+///
+/// Windows are opaque unless [`App::transparent`] is enabled.
 pub struct App<S = ()> {
     title: String,
     width: u32,
     height: u32,
-    background: Color,
+    background: Option<Color>,
+    transparent: bool,
     dpi_mode: DpiMode,
     frameless: bool,
     state: S,
@@ -75,7 +78,8 @@ impl App<()> {
             title: title.into(),
             width: width.max(1),
             height: height.max(1),
-            background: Color::WHITE,
+            background: None,
+            transparent: false,
             dpi_mode: DpiMode::Auto,
             frameless: false,
             state: (),
@@ -96,6 +100,7 @@ impl App<()> {
             width: self.width,
             height: self.height,
             background: self.background,
+            transparent: self.transparent,
             dpi_mode: self.dpi_mode,
             frameless: self.frameless,
             state,
@@ -126,8 +131,59 @@ impl App<()> {
 
 impl<S: 'static> App<S> {
     /// Sets the color used to clear the window before each frame.
+    ///
+    /// The alpha channel is honored. On a [`transparent`](App::transparent)
+    /// window, a background whose alpha is below one lets the desktop show
+    /// through everywhere the draw callback does not paint, and it shows
+    /// through a partially transparent background itself.
+    ///
+    /// The default is white, or transparent black when
+    /// [`transparent`](App::transparent) is enabled and no background was set.
     pub fn background(mut self, color: impl Into<Color>) -> Self {
-        self.background = color.into();
+        self.background = Some(color.into());
+        self
+    }
+
+    /// Makes the window composite with per-pixel alpha, so whatever is behind
+    /// the window shows through the transparent parts of the frame.
+    ///
+    /// Alpha is not a separate setting: every frame starts by clearing the
+    /// canvas to the [`background`](App::background) color, and the draw
+    /// callback then paints on top with source-over blending. The window's
+    /// alpha at a pixel is the alpha of that composite:
+    ///
+    /// - A pixel that is never painted keeps the background alpha. With the
+    ///   default background of a transparent window, which is fully
+    ///   transparent, the desktop shows through completely there.
+    /// - A paint with alpha, such as `colors::WHITE.with_alpha(0.35)`, blends
+    ///   with the desktop behind the window, not only with earlier shapes.
+    /// - [`Canvas::with_opacity`](crate::Canvas::with_opacity) multiplies the
+    ///   alpha of a whole group of shapes.
+    /// - Antialiased edges, including rounded corners and text, fade into the
+    ///   desktop instead of into an opaque background color.
+    ///
+    /// Blending is source-over, so painting a transparent color cannot erase
+    /// opaque pixels. To create a hole, clip the drawing with
+    /// [`Canvas::with_clip`](crate::Canvas::with_clip), or fill an even-odd
+    /// path whose inner subpath is the hole, so the area is never painted.
+    ///
+    /// Enabling this changes the default background from white to transparent;
+    /// call [`background`](App::background) to override it.
+    ///
+    /// # Platform support
+    ///
+    /// Per-pixel alpha is a presentation feature, so it depends on the adapter.
+    /// On Windows the DX12 and OpenGL backends only expose opaque surfaces, so
+    /// this asks for an adapter that reports premultiplied-alpha support (in
+    /// practice Vulkan). If no adapter can do it, the window is created opaque
+    /// and a warning is printed once.
+    ///
+    /// Transparent windows still receive input in their transparent areas. Use
+    /// [`Window::set_cursor_hittest`](winit::window::Window::set_cursor_hittest)
+    /// on the window handed to the event callback to make the whole window
+    /// click-through.
+    pub fn transparent(mut self, transparent: bool) -> Self {
+        self.transparent = transparent;
         self
     }
 
@@ -165,6 +221,10 @@ impl<S: 'static> App<S> {
     /// left to the platform compositor.
     ///
     /// This setting only affects window creation. It is off by default.
+    ///
+    /// A [`transparent`](App::transparent) window does not keep the drop
+    /// shadow: DWM draws it along the rectangular frame, which would show as a
+    /// hard square edge around otherwise transparent corners.
     pub fn frameless(mut self, frameless: bool) -> Self {
         self.frameless = frameless;
         self
@@ -552,7 +612,7 @@ impl<S: 'static> Runner<S> {
                 Some(&state.depth_view),
                 &state.texture_bindings,
                 TargetInit::Clear(ClearSettings::Viewport {
-                    color: self.app.background,
+                    color: state.background,
                 }),
             )
             .context("Vello GPU failed to render the scene")?;
@@ -593,6 +653,7 @@ struct State {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    background: Color,
     renderer: Renderer,
     canvas: Canvas,
     depth_view: wgpu::TextureView,
@@ -606,14 +667,17 @@ impl State {
         let attributes = Window::default_attributes()
             .with_title(&app.title)
             .with_inner_size(LogicalSize::new(app.width, app.height))
-            .with_decorations(!app.frameless);
+            .with_decorations(!app.frameless)
+            .with_transparent(app.transparent);
 
         // An undecorated window keeps its drop shadow. winit implements
         // undecorated windows on Windows by keeping the native frame styles and
         // overriding `WM_NCCALCSIZE`, not by using `WS_POPUP`, so DWM
-        // transitions and the system shadow remain available.
+        // transitions and the system shadow remain available. A transparent
+        // window must not ask for it: the shadow follows the rectangular frame
+        // and would outline the invisible parts of the window.
         #[cfg(target_os = "windows")]
-        let attributes = if app.frameless {
+        let attributes = if app.frameless && !app.transparent {
             attributes.with_undecorated_shadow(true)
         } else {
             attributes
@@ -644,9 +708,21 @@ impl State {
                 ..Default::default()
             }))
         };
-        let adapter = request_adapter(false)
-            .or_else(|_| request_adapter(true))
-            .context("failed to find a compatible GPU adapter")?;
+        // Per-pixel alpha is a presentation capability of the adapter, and it
+        // has to be decided before the surface is configured. Prefer an
+        // adapter that can present premultiplied alpha when the application
+        // asked for transparency, then fall back to the normal request.
+        let adapter = if app.transparent {
+            find_transparent_adapter(&instance, &surface)
+        } else {
+            None
+        };
+        let adapter = match adapter {
+            Some(adapter) => adapter,
+            None => request_adapter(false)
+                .or_else(|_| request_adapter(true))
+                .context("failed to find a compatible GPU adapter")?,
+        };
         if stats_enabled() {
             let info = adapter.get_info();
             eprintln!(
@@ -682,12 +758,14 @@ impl State {
             .copied()
             .find(|format| !is_srgb(*format))
             .unwrap_or(capabilities.formats[0]);
-        let alpha_mode = capabilities
-            .alpha_modes
-            .iter()
-            .copied()
-            .find(|mode| *mode == wgpu::CompositeAlphaMode::Opaque)
-            .unwrap_or(wgpu::CompositeAlphaMode::Auto);
+        let alpha_mode = pick_alpha_mode(app.transparent, &capabilities.alpha_modes);
+        if app.transparent && alpha_mode != wgpu::CompositeAlphaMode::PreMultiplied {
+            eprintln!(
+                "plasticism-draw: this adapter cannot present per-pixel alpha (available: {:?}); \
+                 the window stays opaque",
+                capabilities.alpha_modes
+            );
+        }
 
         // FIFO's get_current_texture can stall during Windows modal resizing
         // (the presentation queue stops draining). Mailbox avoids that wait.
@@ -735,6 +813,10 @@ impl State {
             app.dpi_mode.effective_scale(window.scale_factor()),
         );
 
+        // A transparent application that did not pick a background starts
+        // fully transparent; otherwise the historical opaque white is kept.
+        let background = resolve_background(app.background, app.transparent);
+
         Ok(Self {
             window,
             instance,
@@ -742,6 +824,7 @@ impl State {
             device,
             queue,
             config,
+            background,
             renderer,
             canvas,
             depth_view,
@@ -804,11 +887,76 @@ fn is_srgb(format: wgpu::TextureFormat) -> bool {
     )
 }
 
+/// Finds an adapter whose surface can present premultiplied alpha.
+///
+/// Transparency is a presentation property, so the adapter has to be selected
+/// before the surface is configured. Discrete GPUs are preferred, mirroring the
+/// high-performance request used for opaque windows.
+fn find_transparent_adapter(
+    instance: &wgpu::Instance,
+    surface: &wgpu::Surface<'_>,
+) -> Option<wgpu::Adapter> {
+    let mut candidates: Vec<wgpu::Adapter> =
+        pollster::block_on(instance.enumerate_adapters(wgpu::Backends::PRIMARY))
+            .into_iter()
+            .filter(|adapter| adapter.is_surface_supported(surface))
+            .filter(|adapter| {
+                surface
+                    .get_capabilities(adapter)
+                    .alpha_modes
+                    .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
+            })
+            .collect();
+    candidates.sort_by_key(|adapter| adapter_rank(adapter.get_info().device_type));
+    candidates.into_iter().next()
+}
+
+fn adapter_rank(device_type: wgpu::DeviceType) -> u8 {
+    match device_type {
+        wgpu::DeviceType::DiscreteGpu => 0,
+        wgpu::DeviceType::IntegratedGpu => 1,
+        wgpu::DeviceType::VirtualGpu => 2,
+        wgpu::DeviceType::Other => 3,
+        wgpu::DeviceType::Cpu => 4,
+    }
+}
+
+/// Picks the surface alpha mode for the window.
+///
+/// Per-pixel transparency needs premultiplied compositing; everything else
+/// falls back to the opaque window the library has always used.
+fn pick_alpha_mode(
+    transparent: bool,
+    available: &[wgpu::CompositeAlphaMode],
+) -> wgpu::CompositeAlphaMode {
+    if transparent && available.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
+        return wgpu::CompositeAlphaMode::PreMultiplied;
+    }
+    available
+        .iter()
+        .copied()
+        .find(|mode| *mode == wgpu::CompositeAlphaMode::Opaque)
+        .unwrap_or(wgpu::CompositeAlphaMode::Auto)
+}
+
+/// Resolves the clear color for the frame.
+///
+/// An explicit [`App::background`] always wins. Otherwise a transparent window
+/// clears to transparent black, while an opaque window keeps the historical
+/// white.
+fn resolve_background(background: Option<Color>, transparent: bool) -> Color {
+    background.unwrap_or(if transparent {
+        Color::TRANSPARENT
+    } else {
+        Color::WHITE
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{App, FrameClock};
+    use super::{App, FrameClock, pick_alpha_mode, resolve_background};
     use crate::DpiMode;
 
     #[test]
@@ -890,5 +1038,68 @@ mod tests {
             clock.tick(after),
             (Duration::from_millis(64), Duration::from_millis(16))
         );
+    }
+
+    #[test]
+    fn transparent_defaults_to_false() {
+        let app = App::new("test", 640, 480);
+        assert!(!app.transparent);
+    }
+
+    #[test]
+    fn transparent_is_preserved_by_state() {
+        let app = App::new("test", 640, 480).transparent(true).state(0_u32);
+        assert!(app.transparent);
+    }
+
+    #[test]
+    fn transparent_can_be_set_after_callbacks() {
+        let app = App::new("test", 640, 480)
+            .draw(|_canvas, _frame| {})
+            .transparent(true);
+        assert!(app.transparent);
+    }
+
+    #[test]
+    fn alpha_mode_prefers_premultiplied_only_for_transparent_windows() {
+        let available = [
+            wgpu::CompositeAlphaMode::Opaque,
+            wgpu::CompositeAlphaMode::PreMultiplied,
+        ];
+        assert_eq!(
+            pick_alpha_mode(false, &available),
+            wgpu::CompositeAlphaMode::Opaque
+        );
+        assert_eq!(
+            pick_alpha_mode(true, &available),
+            wgpu::CompositeAlphaMode::PreMultiplied
+        );
+    }
+
+    #[test]
+    fn alpha_mode_falls_back_to_opaque_when_transparency_is_unavailable() {
+        let available = [
+            wgpu::CompositeAlphaMode::Opaque,
+            wgpu::CompositeAlphaMode::Inherit,
+        ];
+        assert_eq!(
+            pick_alpha_mode(true, &available),
+            wgpu::CompositeAlphaMode::Opaque
+        );
+        // Without an opaque mode the surface is left to the platform default.
+        assert_eq!(
+            pick_alpha_mode(true, &[wgpu::CompositeAlphaMode::Inherit]),
+            wgpu::CompositeAlphaMode::Auto
+        );
+    }
+
+    #[test]
+    fn background_follows_transparency_unless_set_explicitly() {
+        assert_eq!(resolve_background(None, false), crate::Color::WHITE);
+        assert_eq!(resolve_background(None, true), crate::Color::TRANSPARENT);
+
+        let explicit = crate::Color::from_rgb8(10, 20, 30);
+        assert_eq!(resolve_background(Some(explicit), false), explicit);
+        assert_eq!(resolve_background(Some(explicit), true), explicit);
     }
 }
