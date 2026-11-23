@@ -9,7 +9,7 @@ fn main() -> anyhow::Result<()> {
 
     App::new("plasticism · animation", 900, 640)
         .background(colors::BLACK)
-        .draw(move |c, frame| {
+        .draw(move |c, frame, _window| {
             let dt = frame.delta.as_secs_f64();
             pulse = (pulse + dt * 2.2).rem_euclid(std::f64::consts::TAU);
             hue_shift = (hue_shift + dt * 0.06).fract();

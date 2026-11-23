@@ -103,7 +103,7 @@ fn main() -> anyhow::Result<()> {
                 _ => {}
             }
         })
-        .on_draw(move |state, canvas, frame| {
+        .on_draw(move |state, canvas, frame, _window| {
             state.phase += frame.delta.as_secs_f64();
             draw(state, canvas, &font);
         })

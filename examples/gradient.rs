@@ -13,7 +13,7 @@ fn main() -> anyhow::Result<()> {
     let mut angle = 0.0_f64;
 
     App::new("plasticism · gradients", 900, 660)
-        .draw(move |c, frame| {
+        .draw(move |c, frame, _window| {
             angle += frame.delta.as_secs_f64() * 0.8;
 
             c.fill_rect(

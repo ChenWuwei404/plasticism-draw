@@ -116,7 +116,7 @@ fn main() -> anyhow::Result<()> {
                 _ => {}
             }
         })
-        .on_draw(move |state, canvas, frame| {
+        .on_draw(move |state, canvas, frame, _window| {
             state.phase += frame.delta.as_secs_f64();
             draw(state, canvas, &font);
         })
@@ -375,7 +375,7 @@ fn draw_title_bar(state: &Demo, canvas: &mut Canvas, font: &Font) {
     let layout = Layout::new(canvas.size());
     let bar = layout.title_bar();
     canvas.fill_rect(bar, rgb(0xFB, 0xFB, 0xFC));
-    
+
     // Application mark.
     canvas.fill_rounded_rect(
         Rect::new(18.0, 13.0, 38.0, 33.0),

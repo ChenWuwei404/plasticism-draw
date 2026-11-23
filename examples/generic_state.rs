@@ -42,7 +42,7 @@ fn build_app(state: BallState) -> anyhow::Result<App<BallState>> {
             }
             _ => {}
         })
-        .on_draw(move |state, canvas, frame| {
+        .on_draw(move |state, canvas, frame, _window| {
             let width = canvas.width();
             let height = canvas.height();
             let floor = height - FLOOR_MARGIN;

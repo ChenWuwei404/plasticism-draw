@@ -11,7 +11,7 @@
 //! fn main() -> anyhow::Result<()> {
 //!     App::new("plasticism", 800, 600)
 //!         .background(colors::WHITE)
-//!         .draw(|canvas, frame| {
+//!         .draw(|canvas, frame, _window| {
 //!             let t = frame.time.as_secs_f64();
 //!             canvas.fill_circle(
 //!                 (400.0 + t.cos() * 100.0, 300.0),
@@ -40,13 +40,17 @@
 //!                 event_loop.exit();
 //!             }
 //!         })
-//!         .on_draw(|state, canvas, frame| {
+//!         .on_draw(|state, canvas, frame, _window| {
 //!             state.frames = frame.index;
 //!             canvas.fill_circle((400.0, 300.0), 80.0, colors::CRIMSON);
 //!         })
 //!         .run()
 //! }
 //! ```
+//!
+//! Both callbacks receive the same [`Window`] instance, so a draw callback can
+//! read or adjust window state such as the title, scale factor, or focus
+//! without storing the window separately.
 //!
 //! Coordinates are logical pixels by default, with the origin at the top-left
 //! corner and the y axis pointing down. DPI handling is automatic: the scene is

@@ -26,7 +26,7 @@ fn main() -> anyhow::Result<()> {
     App::new(format!("plasticism · dpi · {mode:?}"), 900, 640)
         .dpi_mode(mode)
         .background(colors::WHITE)
-        .draw(move |c, _frame| {
+        .draw(move |c, _frame, _window| {
             let width = c.width();
             let height = c.height();
 

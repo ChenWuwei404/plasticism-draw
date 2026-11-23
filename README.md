@@ -14,7 +14,7 @@ fn main() -> anyhow::Result<()> {
 
     App::new("Hello, plasticism", 560, 360)
         .background(colors::GHOST_WHITE)
-        .draw(move |c, _frame| {
+        .draw(move |c, _frame, _window| {
             let measured = font.measure("Hello, plasticism", 64.0);
             let x = (c.width() - measured.width) / 2.0;
 
@@ -55,7 +55,7 @@ fn main() -> anyhow::Result<()> {
     let home = VectorIcon::from_svg_file("home.svg")?;
 
     App::new("images", 800, 600)
-        .draw(move |c, _frame| {
+        .draw(move |c, _frame, _window| {
             // Stretch a bitmap to a rectangle.
             c.draw_image(&photo, Rect::from_origin_size((40.0, 40.0), (300.0, 200.0)));
 
@@ -127,3 +127,4 @@ fn main() -> anyhow::Result<()> {
   - Uses the bitmap alpha channel as a mask
   - Tinted with a solid color
 - Raw winit events
+- Draw callbacks receive the same `Window` as the event callback

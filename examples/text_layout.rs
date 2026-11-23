@@ -66,7 +66,7 @@ fn main() -> anyhow::Result<()> {
 
     App::new("plasticism · text layout", 1200, 800)
         .background(rgb(0xF4, 0xF5, 0xF7))
-        .draw(move |canvas, _frame| {
+        .draw(move |canvas, _frame, _window| {
             let width = canvas.width();
 
             canvas.fill_text(

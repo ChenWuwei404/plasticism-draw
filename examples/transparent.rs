@@ -12,7 +12,7 @@ fn main() -> anyhow::Result<()> {
 
     App::new("transparent", 560, 380)
         .transparent(true)
-        .draw(move |c, _frame| {
+        .draw(move |c, _frame, _window| {
             let (w, h) = (c.width(), c.height());
 
             // The card covers most of the window but leaves a transparent

@@ -20,7 +20,7 @@ fn main() -> anyhow::Result<()> {
 
     App::new("icons", 900, 600)
         .background(colors::WHITE)
-        .draw(move |c, frame| {
+        .draw(move |c, frame, _window| {
             c.set_transform(fit_view(c));
 
             c.fill_text(

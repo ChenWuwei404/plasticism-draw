@@ -21,7 +21,7 @@ use crate::{Canvas, Color, DpiMode};
 type EventCallback<S> = Box<
     dyn for<'a, 'b, 'c> FnMut(&mut S, &'a WindowEvent, &'b ActiveEventLoop, &'c Window) + 'static,
 >;
-type DrawCallback<S> = Box<dyn FnMut(&mut S, &mut Canvas, Frame) + 'static>;
+type DrawCallback<S> = Box<dyn for<'a> FnMut(&mut S, &mut Canvas, Frame, &'a Window) + 'static>;
 
 /// Timing information for one rendered frame.
 #[derive(Clone, Copy, Debug)]
@@ -49,7 +49,9 @@ pub struct Frame {
 /// [`DpiMode::Auto`].
 ///
 /// The optional state parameter is owned by the application and mutably passed
-/// to the event and draw callbacks.
+/// to the event and draw callbacks. Both callbacks also receive the same
+/// [`Window`] instance, so drawing code can inspect or configure the window
+/// that delivered the events.
 ///
 /// Windows are opaque unless [`App::transparent`] is enabled.
 pub struct App<S = ()> {
@@ -112,16 +114,22 @@ impl App<()> {
 
     /// Registers the stateless drawing callback and returns the builder.
     ///
+    /// The callback receives the canvas, the frame timing, and the application
+    /// window. That is the same [`Window`] instance that
+    /// [`on_event`](App::on_event) receives, so a draw callback may read window
+    /// state such as the title, the scale factor, or whether the window is
+    /// focused.
+    ///
     /// This convenience entry responds to `CloseRequested` by exiting the
     /// event loop. Use [`App::on_draw`] with a state if you need custom close
     /// handling.
     pub fn draw<F>(mut self, mut draw: F) -> Self
     where
-        F: FnMut(&mut Canvas, Frame) + 'static,
+        F: FnMut(&mut Canvas, Frame, &Window) + 'static,
     {
         self.on_draw = Some(Box::new(
-            move |_state: &mut (), canvas: &mut Canvas, frame: Frame| {
-                draw(canvas, frame);
+            move |_state: &mut (), canvas: &mut Canvas, frame: Frame, window: &Window| {
+                draw(canvas, frame, window);
             },
         ));
         self.close_on_request = true;
@@ -249,11 +257,16 @@ impl<S: 'static> App<S> {
 
     /// Registers a stateful drawing callback.
     ///
+    /// The callback receives the user state, the canvas, the frame timing, and
+    /// the application window. The window is the same [`Window`] instance that
+    /// [`on_event`](App::on_event) receives, so drawing code and event handling
+    /// can share window state without storing the window separately.
+    ///
     /// This entry does not handle `CloseRequested`; use [`App::on_event`] to
     /// implement a custom close policy.
     pub fn on_draw<F>(mut self, draw: F) -> Self
     where
-        F: FnMut(&mut S, &mut Canvas, Frame) + 'static,
+        F: FnMut(&mut S, &mut Canvas, Frame, &Window) + 'static,
     {
         self.on_draw = Some(Box::new(draw));
         self.close_on_request = false;
@@ -591,7 +604,7 @@ impl<S: 'static> Runner<S> {
             let draw = on_draw
                 .as_mut()
                 .ok_or_else(|| anyhow!("no draw callback registered"))?;
-            draw(app_state, &mut state.canvas, frame);
+            draw(app_state, &mut state.canvas, frame, &state.window);
         }
         state.canvas.finish_frame();
         let draw_time = draw_start.elapsed();
@@ -976,7 +989,7 @@ mod tests {
     #[test]
     fn dpi_mode_can_be_set_after_callbacks() {
         let app = App::new("test", 640, 480)
-            .draw(|_canvas, _frame| {})
+            .draw(|_canvas, _frame, _window| {})
             .dpi_mode(DpiMode::Fixed(2.0));
         assert_eq!(app.dpi_mode, DpiMode::Fixed(2.0));
     }
@@ -996,7 +1009,7 @@ mod tests {
     #[test]
     fn frameless_can_be_set_after_callbacks() {
         let app = App::new("test", 640, 480)
-            .draw(|_canvas, _frame| {})
+            .draw(|_canvas, _frame, _window| {})
             .frameless(true);
         assert!(app.frameless);
     }
@@ -1055,7 +1068,7 @@ mod tests {
     #[test]
     fn transparent_can_be_set_after_callbacks() {
         let app = App::new("test", 640, 480)
-            .draw(|_canvas, _frame| {})
+            .draw(|_canvas, _frame, _window| {})
             .transparent(true);
         assert!(app.transparent);
     }

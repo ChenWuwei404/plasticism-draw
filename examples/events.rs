@@ -1,8 +1,8 @@
 //! Raw winit events with user-owned mutable state.
 //!
 //! This example shows why the stateful `on_event` / `on_draw` entry exists:
-//! both callbacks mutate the same `Demo` value, and closing is handled
-//! explicitly by the event callback.
+//! both callbacks mutate the same `Demo` value, both receive the same window,
+//! and closing is handled explicitly by the event callback.
 
 use plasticism_draw::prelude::*;
 
@@ -40,7 +40,7 @@ fn main() -> anyhow::Result<()> {
             }
             _ => {}
         })
-        .on_draw(move |state, canvas, frame| {
+        .on_draw(move |state, canvas, frame, window| {
             state.phase += frame.delta.as_secs_f64();
 
             let center = (canvas.width() / 2.0, canvas.height() / 2.0);
@@ -55,8 +55,11 @@ fn main() -> anyhow::Result<()> {
             }
 
             let key = state.last_key.as_deref().unwrap_or("(none)");
+            // The draw callback receives the same window as the event
+            // callback, so it can read window state without storing it.
+            let scale = window.scale_factor();
             let status = format!(
-                "frame {}   key: {}   close via the window button",
+                "frame {}   key: {}   scale {scale:.2}   close via the window button",
                 frame.index, key
             );
             canvas.fill_text(

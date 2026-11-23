@@ -8,7 +8,7 @@ fn main() -> anyhow::Result<()> {
 
     App::new("plasticism · R2 rounded rect", 960, 640)
         .background(colors::WHITE_SMOKE)
-        .draw(move |c, frame| {
+        .draw(move |c, frame, _window| {
             phase += frame.delta.as_secs_f64();
 
             let left_shape = R2RoundedRect::new(60.0, 64.0, 440.0, 284.0, 48.0);

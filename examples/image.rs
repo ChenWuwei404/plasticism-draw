@@ -11,7 +11,7 @@ fn main() -> anyhow::Result<()> {
 
     App::new("image", 900, 675)
         .background(colors::WHITE)
-        .draw(move |c, frame| {
+        .draw(move |c, frame, _window| {
             let view = fit_view(c);
             c.set_transform(view);
 

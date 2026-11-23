@@ -5,7 +5,7 @@ fn main() -> anyhow::Result<()> {
 
     App::new("Hello, plasticism", 560, 360)
         .background(colors::GHOST_WHITE)
-        .draw(move |c, _frame| {
+        .draw(move |c, _frame, _window| {
             let measured = font.measure("Hello, plasticism", 64.0);
             let x = (c.width() - measured.width) / 2.0;
 
