@@ -14,6 +14,7 @@ use crate::kurbo::{
 };
 use crate::paint::{Paint, Stroke};
 use crate::r2::R2RoundedRect;
+use crate::shadow::Shadow;
 use crate::text::{Font, TextLayout, TextStyle};
 
 const TOLERANCE: f64 = 0.1;
@@ -43,6 +44,7 @@ pub struct Canvas {
 enum Open {
     Clip,
     Opacity,
+    Filter,
 }
 
 impl Canvas {
@@ -80,7 +82,7 @@ impl Canvas {
         while let Some(open) = self.open.pop() {
             match open {
                 Open::Clip => self.scene.pop_clip(),
-                Open::Opacity => self.scene.pop_layer(),
+                Open::Opacity | Open::Filter => self.scene.pop_layer(),
             }
         }
     }
@@ -396,6 +398,47 @@ impl Canvas {
         let stroke = stroke.into();
         self.apply_stroke(&stroke);
         self.scene.stroke_path(path);
+    }
+
+    /// Draws the drop shadow cast by `shape`.
+    ///
+    /// Only the shadow is drawn, never the shape itself. Draw the shape
+    /// afterwards to put it on top of its own shadow:
+    ///
+    /// ```text
+    /// c.draw_shadow(card, Shadow::default());
+    /// c.fill(card, colors::WHITE);
+    /// ```
+    ///
+    /// The shadow follows the shape's alpha coverage, so open outlines and
+    /// paths with holes cast a shadow that matches their silhouette; the
+    /// current fill rule decides which parts are covered. Offsets and blur are
+    /// in canvas units and follow the current transform, so a rotated or scaled
+    /// transform rotates and scales the shadow with the shape. [`BezPath`] does
+    /// not implement [`Shape`] by reference; pass `path.elements()` instead of
+    /// cloning the path.
+    ///
+    /// Every call records a separate filter layer, which needs an intermediate
+    /// render target, so avoid drawing hundreds of shadows in one frame.
+    pub fn draw_shadow(&mut self, shape: impl Shape, shadow: impl Into<Shadow>) {
+        let shadow = shadow.into();
+        let path = shape.into_path(TOLERANCE);
+
+        self.scene.push_filter_layer(shadow.filter());
+        self.open.push(Open::Filter);
+        self.scene
+            .set_paint(Paint::solid(shadow.silhouette()).into_inner());
+        self.scene.fill_path(&path);
+        self.pop_filter_layer();
+    }
+
+    fn pop_filter_layer(&mut self) {
+        if self.open.last() == Some(&Open::Filter) {
+            self.open.pop();
+            self.scene.pop_layer();
+        } else {
+            debug_assert!(false, "filter layer was closed out of order");
+        }
     }
 
     /// Draws a bitmap stretched to fill `rect`.

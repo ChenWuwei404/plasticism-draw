@@ -30,6 +30,7 @@ Run these examples to explore features:
 cargo run --example shapes         # basic shapes
 cargo run --example gradient       # gradient, clip and opacity
 cargo run --example clip           # rounded rect clipped text
+cargo run --example shadow         # shape-based drop shadows
 cargo run --example r2_rounded     # R2 rounded rect
 cargo run --example r2_interactive # interactive R2 rounded rect
 cargo run --example animation      # animation based on delta
@@ -102,6 +103,7 @@ fn main() -> anyhow::Result<()> {
   - Polygon
   - Bezier path
 - Fill and Stroke
+- Shape-based drop shadows with offset, blur radius, and color
 - Transform, clip and opacity
 - Mailbox presentation when supported, avoiding FIFO acquire stalls during window resizing; fallback is AutoVsync
 - No built-in frame cap with Mailbox; throttle redraws in the application if needed

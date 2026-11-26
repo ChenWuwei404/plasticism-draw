@@ -85,6 +85,19 @@
 //! resulting geometry with any [`Paint`]. [`Canvas::draw_bitmap_icon`] uses a
 //! bitmap's alpha channel as a mask for a solid tint color.
 //!
+//! Shapes can cast soft drop shadows. [`Shadow`] describes an offset, a blur
+//! radius in the `box-shadow` sense, and a color. [`Canvas::draw_shadow`] draws
+//! only the shadow, so the shape is painted afterwards on top of it:
+//!
+//! ```no_run
+//! # use plasticism_draw::prelude::*;
+//! # fn demo(c: &mut Canvas) {
+//! let card = Rect::from_origin_size((40.0, 40.0), (240.0, 160.0));
+//! c.draw_shadow(card, Shadow::default());
+//! c.fill_rect(card, colors::WHITE);
+//! # }
+//! ```
+//!
 //! Text is shaped and laid out by parley. [`Font`] loads a face and registers
 //! its family for layout with automatic system-font fallback.
 //! [`TextStyle`] selects size, weight, italic/oblique, width, variable axes,
@@ -113,6 +126,7 @@ mod icon;
 mod image;
 mod paint;
 mod r2;
+mod shadow;
 mod text;
 
 pub use app::{App, Frame};
@@ -122,6 +136,7 @@ pub use icon::VectorIcon;
 pub use image::{Image, ImageFit};
 pub use paint::{Paint, Stroke};
 pub use r2::{R2RoundedRect, r2_rounded_rect_path};
+pub use shadow::Shadow;
 pub use text::{
     Font, FontFeature, FontMetrics, FontStyle, FontVariation, FontWeight, FontWidth, GenericFamily,
     LineMetrics, RichText, RunMetrics, Tag, TextAlign, TextLayout, TextMetrics, TextStyle,
@@ -155,7 +170,7 @@ pub mod prelude {
         ActiveEventLoop, App, Canvas, Color, DpiMode, ElementState, Font, FontFeature, FontMetrics,
         FontStyle, FontVariation, FontWeight, FontWidth, Frame, GenericFamily, Gradient, Image,
         ImageFit, Key, KeyEvent, LineMetrics, NamedKey, Paint, R2RoundedRect, RichText, RunMetrics,
-        Stroke, Tag, TextAlign, TextLayout, TextMetrics, TextStyle, VectorIcon, Window,
+        Shadow, Stroke, Tag, TextAlign, TextLayout, TextMetrics, TextStyle, VectorIcon, Window,
         WindowEvent, WindowId, colors, kurbo, peniko, r2_rounded_rect_path, winit,
     };
 }
